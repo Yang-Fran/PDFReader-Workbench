@@ -1,0 +1,22 @@
+[package]
+name = "pdfreader_workbench"
+version = "2.1.0"
+description = "PDF Reader Workbench"
+authors = ["you"]
+edition = "2021"
+
+[lib]
+name = "pdfreader_workbench_lib"
+crate-type = ["staticlib", "cdylib", "rlib"]
+
+[build-dependencies]
+tauri-build = { version = "=2.5.6", features = [] }
+
+[dependencies]
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+tauri = { version = "=2.10.3", features = [] }
+tauri-plugin-dialog = "=2.6.0"
+tauri-plugin-fs = "=2.4.5"
+tauri-plugin-http = "=2.5.2"
+reqwest = { version = "0.12", default-features = false, features = ["json", "rustls-tls"] }

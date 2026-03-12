@@ -1,0 +1,30 @@
+# Node / frontend
+node_modules/
+dist/
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+pnpm-debug.log*
+
+# Tauri / Rust
+src-tauri/target/
+target/
+
+# Local workspace and private notes
+pre-input.txt
+translation_cache/
+llm_cache/
+*.pdfwb
+
+# Local tooling
+.tools/
+
+# Environment / secrets
+.env
+.env.*
+
+# Editor / OS
+.vscode/
+.idea/
+.DS_Store
+Thumbs.db
