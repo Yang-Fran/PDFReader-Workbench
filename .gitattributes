@@ -1,0 +1,19 @@
+* text=auto eol=lf
+
+*.png binary
+*.ico binary
+*.icns binary
+*.exe binary
+*.msi binary
+*.pdf binary
+*.woff binary
+*.woff2 binary
+*.ttf binary
+
+*.md text eol=lf
+*.ts text eol=lf
+*.tsx text eol=lf
+*.js text eol=lf
+*.json text eol=lf
+*.css text eol=lf
+*.rs text eol=lf

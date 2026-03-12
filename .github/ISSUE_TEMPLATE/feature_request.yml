@@ -1,0 +1,34 @@
+name: Feature request
+description: Suggest an improvement to the app, workflow, or documentation
+title: "[Feature] "
+labels:
+  - enhancement
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Thanks for the suggestion. Clear use cases help keep the project focused.
+  - type: textarea
+    id: problem
+    attributes:
+      label: Problem to solve
+      placeholder: What pain point or limitation are you trying to address?
+    validations:
+      required: true
+  - type: textarea
+    id: proposal
+    attributes:
+      label: Proposed solution
+      placeholder: Describe the change you want to see.
+    validations:
+      required: true
+  - type: textarea
+    id: alternatives
+    attributes:
+      label: Alternatives considered
+      placeholder: Optional
+  - type: textarea
+    id: context
+    attributes:
+      label: Extra context
+      placeholder: Screenshots, mockups, examples, related workflows, or compatibility notes.

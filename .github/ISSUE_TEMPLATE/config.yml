@@ -1,0 +1,5 @@
+blank_issues_enabled: true
+contact_links:
+  - name: Contribution guide
+    url: https://github.com/Yang-Fran/PDFReader-Workbench/blob/main/CONTRIBUTING.md
+    about: Read the development, verification, and contribution workflow first.

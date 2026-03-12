@@ -1,0 +1,68 @@
+name: Bug report
+description: Report a reproducible bug in the app or project workflow
+title: "[Bug] "
+labels:
+  - bug
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Thanks for reporting a bug. Please provide enough detail to reproduce the issue.
+  - type: input
+    id: version
+    attributes:
+      label: App version
+      placeholder: 2.1.0
+    validations:
+      required: true
+  - type: input
+    id: platform
+    attributes:
+      label: Platform
+      placeholder: Windows 11 24H2
+    validations:
+      required: true
+  - type: dropdown
+    id: area
+    attributes:
+      label: Area
+      options:
+        - PDF viewer
+        - OCR
+        - Translation
+        - Markdown
+        - Agent
+        - Project save/load
+        - Cache
+        - Packaging
+        - Other
+    validations:
+      required: true
+  - type: textarea
+    id: steps
+    attributes:
+      label: Reproduction steps
+      placeholder: |
+        1. Open a project
+        2. Switch to a second PDF
+        3. Run translation
+        4. Observe...
+    validations:
+      required: true
+  - type: textarea
+    id: expected
+    attributes:
+      label: Expected behavior
+    validations:
+      required: true
+  - type: textarea
+    id: actual
+    attributes:
+      label: Actual behavior
+    validations:
+      required: true
+  - type: textarea
+    id: context
+    attributes:
+      label: Extra context
+      description: Include logs, screenshots, project/cache details, or provider/model info if relevant. Do not include API keys.
