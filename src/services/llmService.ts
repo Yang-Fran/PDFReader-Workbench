@@ -1,4 +1,5 @@
 import { invoke } from "@tauri-apps/api/core";
+import { listen } from "@tauri-apps/api/event";
 import { fetch as tauriFetch } from "@tauri-apps/plugin-http";
 import { AgentAttachment, ChatMessage } from "../types";
 import { useAppStore } from "../stores/appStore";
@@ -36,6 +37,14 @@ interface RequestOptions {
   extraPayload?: Record<string, unknown>;
 }
 
+interface ProxyStreamEvent {
+  requestId: string;
+  content?: string;
+  reasoning?: string;
+  done: boolean;
+  error?: string;
+}
+
 const DEFAULT_TRANSLATION_PROMPT =
   "You are an academic translator. Translate the input into polished Chinese. Output only the final translation content. Do not include explanations, notes, headings, or reasoning.";
 
@@ -56,6 +65,23 @@ const throwAbortIfNeeded = (signal?: AbortSignal) => {
   if (signal?.aborted) throw new DOMException("The operation was aborted.", "AbortError");
 };
 
+const isLocalEndpoint = (endpoint: string) => {
+  try {
+    const url = new URL(endpoint);
+    return ["127.0.0.1", "localhost", "::1"].includes(url.hostname);
+  } catch {
+    return false;
+  }
+};
+
+const summarizeMessages = (messages: LlmMessagePayload[]) => {
+  const roles = messages.map((message) => message.role).join(">");
+  const userCount = messages.filter((message) => message.role === "user" && message.content.trim()).length;
+  const assistantCount = messages.filter((message) => message.role === "assistant").length;
+  const systemCount = messages.filter((message) => message.role === "system").length;
+  return { roles, userCount, assistantCount, systemCount };
+};
+
 const getRequestContext = (messages: LlmMessagePayload[], stream: boolean, options: RequestOptions = {}) => {
   const { baseUrl, apiKey, model } = useAppStore.getState().settings;
   if (!baseUrl) throw new Error("Base URL is required.");
@@ -69,9 +95,10 @@ const getRequestContext = (messages: LlmMessagePayload[], stream: boolean, optio
     "Content-Type": "application/json",
     Authorization: `Bearer ${apiKey}`
   };
+  const summary = summarizeMessages(messages);
 
   debugLogger.info(
-    `[LLM] POST ${endpoint} model=${model} messages=${messages.length} stream=${stream} firstRole=${messages[0]?.role ?? "n/a"}`
+    `[LLM] POST ${endpoint} model=${model} messages=${messages.length} stream=${stream} firstRole=${messages[0]?.role ?? "n/a"} roles=${summary.roles} users=${summary.userCount} systems=${summary.systemCount} assistants=${summary.assistantCount}`
   );
 
   return {
@@ -149,9 +176,57 @@ const processSseBuffer = (buffer: string, onChunk: (data: string) => void) => {
 };
 
 const postChatStream = async (messages: LlmMessagePayload[], callbacks: StreamCallbacks = {}, options: RequestOptions = {}) => {
-  const { endpoint, headers, body } = getRequestContext(messages, true, options);
+  const { endpoint, headers, body, apiKey, model } = getRequestContext(messages, true, options);
   const { onToken, onReasoning, signal } = callbacks;
   let fullContent = "";
+
+  if (isLocalEndpoint(endpoint)) {
+    const requestId = `llm-stream-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
+    debugLogger.info(`[LLM] local endpoint detected, use rust streaming proxy: ${endpoint} requestId=${requestId}`);
+
+    let completed = false;
+    const unlisten = await listen<ProxyStreamEvent>("llm-stream-chunk", (event) => {
+      const payload = event.payload;
+      if (!payload || payload.requestId !== requestId) return;
+      if (payload.reasoning) onReasoning?.(payload.reasoning);
+      if (payload.content) {
+        fullContent += payload.content;
+        onToken?.(payload.content);
+      }
+      if (payload.done) {
+        completed = true;
+      }
+      if (payload.error) {
+        debugLogger.error(`[LLM] rust stream error requestId=${requestId} ${payload.error}`);
+      }
+    });
+
+    try {
+      await invoke("llm_chat_proxy_stream", {
+        requestId,
+        endpoint,
+        apiKey,
+        model,
+        messages
+      });
+      if (!completed) {
+        debugLogger.warn(`[LLM] rust stream finished without explicit done event requestId=${requestId}`);
+      }
+      debugLogger.info(`[LLM] rust stream response ok chars=${fullContent.length} requestId=${requestId}`);
+      return fullContent;
+    } catch (error) {
+      const message = error instanceof Error ? error.message : String(error);
+      debugLogger.warn(`[LLM] rust stream failed, fallback to non-stream: ${message} requestId=${requestId}`);
+      const content = await postChat(messages, signal, options);
+      if (content) {
+        const remainder = fullContent ? content.slice(fullContent.length) : content;
+        if (remainder) onToken?.(remainder);
+      }
+      return content;
+    } finally {
+      unlisten();
+    }
+  }
 
   try {
     const response = await fetch(endpoint, { method: "POST", headers, body, signal });
@@ -251,25 +326,31 @@ const buildChatPayload = (messages: ChatMessage[]) => {
     .map((message) => ({ role: message.role, content: message.content }));
   const firstNonAssistantIndex = rawPayload.findIndex((message) => message.role !== "assistant");
   const payload = firstNonAssistantIndex >= 0 ? rawPayload.slice(firstNonAssistantIndex) : rawPayload;
-  const prefix: LlmMessagePayload[] = [];
+  const systemBlocks: string[] = [];
 
   if (settings.chatSystemPrompt.trim()) {
-    prefix.push({ role: "system", content: settings.chatSystemPrompt.trim() });
+    systemBlocks.push(settings.chatSystemPrompt.trim());
   }
   if (settings.glossary.trim()) {
-    prefix.push({ role: "system", content: `Glossary / preferred terminology:\n${settings.glossary.trim()}` });
+    systemBlocks.push(`Glossary / preferred terminology:\n${settings.glossary.trim()}`);
   }
   if (settings.enableAgentAttachments && attachments.length > 0) {
-    prefix.push({ role: "system", content: buildAttachmentContext(attachments) });
+    systemBlocks.push(buildAttachmentContext(attachments));
   }
   if (settings.includeProjectContextInChat) {
     const projectContext = buildProjectContext();
     if (projectContext) {
-      prefix.push({ role: "system", content: projectContext });
+      systemBlocks.push(projectContext);
     }
   }
 
-  return [...prefix, ...payload];
+  const combinedSystem = systemBlocks.join("\n\n");
+  const combinedPayload = combinedSystem ? [{ role: "system", content: combinedSystem }, ...payload] : payload;
+  const userCount = combinedPayload.filter((message) => message.role === "user" && message.content.trim()).length;
+  if (userCount === 0) {
+    debugLogger.warn(`[LLM] buildChatPayload produced no user message; roles=${combinedPayload.map((message) => message.role).join(">")}`);
+  }
+  return combinedPayload;
 };
 
 const buildTranslationPayload = (text: string) => {

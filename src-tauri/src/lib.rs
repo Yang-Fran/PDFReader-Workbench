@@ -5,6 +5,7 @@ use std::{
   path::{Path, PathBuf},
   process::Command,
 };
+use tauri::Emitter;
 
 #[tauri::command]
 fn quit_app(app: tauri::AppHandle) {
@@ -75,6 +76,32 @@ struct LlmResponse {
   choices: Option<Vec<LlmChoice>>,
 }
 
+#[derive(Debug, Deserialize)]
+struct LlmStreamDelta {
+  content: Option<String>,
+  reasoning_content: Option<String>,
+}
+
+#[derive(Debug, Deserialize)]
+struct LlmStreamChoice {
+  delta: Option<LlmStreamDelta>,
+}
+
+#[derive(Debug, Deserialize)]
+struct LlmStreamResponse {
+  choices: Option<Vec<LlmStreamChoice>>,
+}
+
+#[derive(Debug, Serialize, Clone)]
+#[serde(rename_all = "camelCase")]
+struct LlmStreamEvent {
+  request_id: String,
+  content: Option<String>,
+  reasoning: Option<String>,
+  done: bool,
+  error: Option<String>,
+}
+
 #[tauri::command]
 async fn llm_chat_proxy(endpoint: String, api_key: String, model: String, messages: Vec<LlmMessage>) -> Result<String, String> {
   let client = reqwest::Client::new();
@@ -106,6 +133,129 @@ async fn llm_chat_proxy(endpoint: String, api_key: String, model: String, messag
     .and_then(|m| m.content)
     .unwrap_or_default();
   Ok(content)
+}
+
+fn emit_llm_stream_event(app: &tauri::AppHandle, event: LlmStreamEvent) {
+  let _ = app.emit("llm-stream-chunk", event);
+}
+
+fn process_sse_block(app: &tauri::AppHandle, request_id: &str, block: &str) -> Result<(), String> {
+  let data_lines = block
+    .lines()
+    .filter_map(|line| line.strip_prefix("data:").map(str::trim))
+    .filter(|line| !line.is_empty())
+    .collect::<Vec<_>>();
+
+  for data in data_lines {
+    if data == "[DONE]" {
+      emit_llm_stream_event(
+        app,
+        LlmStreamEvent {
+          request_id: request_id.to_string(),
+          content: None,
+          reasoning: None,
+          done: true,
+          error: None,
+        },
+      );
+      continue;
+    }
+
+    let parsed: LlmStreamResponse =
+      serde_json::from_str(data).map_err(|e| format!("stream json parse error: {e}; chunk={data}"))?;
+    let delta = parsed
+      .choices
+      .and_then(|choices| choices.into_iter().next())
+      .and_then(|choice| choice.delta);
+    let content = delta.as_ref().and_then(|item| item.content.clone());
+    let reasoning = delta.and_then(|item| item.reasoning_content);
+
+    if content.as_deref().unwrap_or("").is_empty() && reasoning.as_deref().unwrap_or("").is_empty() {
+      continue;
+    }
+
+    emit_llm_stream_event(
+      app,
+      LlmStreamEvent {
+        request_id: request_id.to_string(),
+        content,
+        reasoning,
+        done: false,
+        error: None,
+      },
+    );
+  }
+
+  Ok(())
+}
+
+#[tauri::command]
+async fn llm_chat_proxy_stream(
+  app: tauri::AppHandle,
+  request_id: String,
+  endpoint: String,
+  api_key: String,
+  model: String,
+  messages: Vec<LlmMessage>,
+) -> Result<(), String> {
+  let client = reqwest::Client::new();
+  let payload = serde_json::json!({
+    "model": model,
+    "messages": messages,
+    "stream": true
+  });
+
+  let mut response = client
+    .post(endpoint)
+    .bearer_auth(api_key)
+    .header("Content-Type", "application/json")
+    .json(&payload)
+    .send()
+    .await
+    .map_err(|e| format!("network error: {e}"))?;
+
+  let status = response.status();
+  if !status.is_success() {
+    let text = response.text().await.map_err(|e| format!("read body error: {e}"))?;
+    return Err(format!("http {} {}", status.as_u16(), text));
+  }
+
+  let mut buffer = String::new();
+  let mut done_emitted = false;
+
+  while let Some(chunk) = response.chunk().await.map_err(|e| format!("stream read error: {e}"))? {
+    buffer.push_str(&String::from_utf8_lossy(&chunk).replace("\r\n", "\n"));
+    while let Some(boundary) = buffer.find("\n\n") {
+      let block = buffer[..boundary].to_string();
+      buffer = buffer[boundary + 2..].to_string();
+      process_sse_block(&app, &request_id, &block)?;
+      if block.lines().any(|line| line.trim() == "data: [DONE]") {
+        done_emitted = true;
+      }
+    }
+  }
+
+  if !buffer.trim().is_empty() {
+    process_sse_block(&app, &request_id, &buffer)?;
+    if buffer.lines().any(|line| line.trim() == "data: [DONE]") {
+      done_emitted = true;
+    }
+  }
+
+  if !done_emitted {
+    emit_llm_stream_event(
+      &app,
+      LlmStreamEvent {
+        request_id,
+        content: None,
+        reasoning: None,
+        done: true,
+        error: None,
+      },
+    );
+  }
+
+  Ok(())
 }
 
 #[derive(Debug, Deserialize)]
@@ -335,6 +485,7 @@ pub fn run() {
       quit_app,
       log_event,
       llm_chat_proxy,
+      llm_chat_proxy_stream,
       read_binary_file,
       read_text_file_any,
       write_text_file_any,

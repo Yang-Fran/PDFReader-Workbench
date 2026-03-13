@@ -1,6 +1,6 @@
 {
   "name": "pdfreader-workbench",
-  "version": "2.1.0",
+  "version": "2.2.0",
   "description": "Desktop workspace for PDF reading, OCR, translation, Markdown notes, and AI-assisted analysis.",
   "private": true,
   "license": "MIT",

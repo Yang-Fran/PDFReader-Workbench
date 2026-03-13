@@ -1,7 +1,10 @@
 import { useEffect, useMemo, useState } from "react";
+import { invoke } from "@tauri-apps/api/core";
 import CodeMirror from "@uiw/react-codemirror";
 import { markdown } from "@codemirror/lang-markdown";
+import { HighlightStyle, syntaxHighlighting } from "@codemirror/language";
 import { EditorView } from "@codemirror/view";
+import { tags } from "@lezer/highlight";
 import ReactMarkdown from "react-markdown";
 import type { Components } from "react-markdown";
 import remarkGfm from "remark-gfm";
@@ -34,6 +37,104 @@ const parsePdfQuoteBlock = (value: string): { meta: QuoteMeta; text: string } | 
   }
 };
 
+const isExternalUrl = (value: string) => /^(https?:|data:|asset:|tauri:|blob:)/i.test(value);
+
+const getDirname = (path: string) => {
+  const normalized = path.replace(/\\/g, "/");
+  const index = normalized.lastIndexOf("/");
+  return index >= 0 ? normalized.slice(0, index) : normalized;
+};
+
+const joinPath = (base: string, relative: string) => {
+  if (!base) return relative;
+  const baseParts = base.replace(/\\/g, "/").split("/");
+  const relativeParts = relative.replace(/\\/g, "/").split("/");
+  const segments = [...baseParts];
+
+  for (const part of relativeParts) {
+    if (!part || part === ".") continue;
+    if (part === "..") {
+      if (segments.length > 0) segments.pop();
+      continue;
+    }
+    segments.push(part);
+  }
+
+  return segments.join("/");
+};
+
+const guessImageMimeType = (path: string) => {
+  const lower = path.toLowerCase();
+  if (lower.endsWith(".png")) return "image/png";
+  if (lower.endsWith(".jpg") || lower.endsWith(".jpeg")) return "image/jpeg";
+  if (lower.endsWith(".gif")) return "image/gif";
+  if (lower.endsWith(".webp")) return "image/webp";
+  if (lower.endsWith(".svg")) return "image/svg+xml";
+  if (lower.endsWith(".bmp")) return "image/bmp";
+  return "application/octet-stream";
+};
+
+function MarkdownImage(props: { src: string; alt?: string; title?: string; assetBase: string }) {
+  const { src, alt, title, assetBase } = props;
+  const [blobUrl, setBlobUrl] = useState("");
+  const [failed, setFailed] = useState(false);
+
+  const resolvedSrc = useMemo(() => {
+    if (!src) return "";
+    if (isExternalUrl(src) || /^[a-zA-Z]:[\\/]/.test(src) || src.startsWith("/")) return src;
+    return joinPath(assetBase, src);
+  }, [assetBase, src]);
+
+  useEffect(() => {
+    let disposed = false;
+    let localUrl = "";
+
+    if (!resolvedSrc || isExternalUrl(resolvedSrc)) {
+      setBlobUrl(resolvedSrc);
+      setFailed(false);
+      return;
+    }
+
+    setBlobUrl("");
+    setFailed(false);
+
+    void (async () => {
+      try {
+        const bytes = await invoke<number[]>("read_binary_file", { path: resolvedSrc });
+        if (disposed) return;
+        const blob = new Blob([new Uint8Array(bytes)], { type: guessImageMimeType(resolvedSrc) });
+        localUrl = URL.createObjectURL(blob);
+        setBlobUrl(localUrl);
+      } catch {
+        if (!disposed) setFailed(true);
+      }
+    })();
+
+    return () => {
+      disposed = true;
+      if (localUrl) URL.revokeObjectURL(localUrl);
+    };
+  }, [resolvedSrc]);
+
+  return (
+    <span className="markdown-image-wrap">
+      {blobUrl && !failed ? (
+        <img
+          src={blobUrl}
+          alt={alt ?? ""}
+          title={title}
+          className="markdown-image"
+          loading="lazy"
+          onError={() => setFailed(true)}
+        />
+      ) : (
+        <span className="markdown-image-error">{alt || src}</span>
+      )}
+      {alt ? <span className="markdown-image-caption">{alt}</span> : null}
+    </span>
+  );
+}
+
 export function NotesPane() {
   const [editorView, setEditorView] = useState<EditorView | null>(null);
   const [refreshTick, setRefreshTick] = useState(0);
@@ -46,7 +147,28 @@ export function NotesPane() {
   const setSelectedPdfQuote = useAppStore((s) => s.setSelectedPdfQuote);
   const lastAIReply = useAppStore((s) => s.lastAIReply);
   const requestPdfOpen = useAppStore((s) => s.requestPdfOpen);
+  const projectPath = useAppStore((s) => s.projectPath);
+  const notesFilePath = useAppStore((s) => s.notesFilePath);
   const language = useAppStore((s) => s.settings.language);
+
+  const markdownAssetBase = useMemo(() => {
+    if (notesFilePath) return getDirname(notesFilePath);
+    if (projectPath) return getDirname(projectPath);
+    return "";
+  }, [notesFilePath, projectPath]);
+
+  const editorHighlightExtension = useMemo(
+    () =>
+      syntaxHighlighting(
+        HighlightStyle.define([
+          { tag: [tags.processingInstruction, tags.meta, tags.special(tags.string)], color: "var(--code-block-text)" },
+          { tag: [tags.monospace, tags.content], color: "var(--code-block-text)" },
+          { tag: [tags.string, tags.labelName], color: "color-mix(in srgb, var(--code-block-text) 92%, var(--text-main))" },
+          { tag: [tags.heading], color: "var(--text-main)" }
+        ])
+      ),
+    []
+  );
 
   const insertIntoEditor = (value: string) => {
     if (!value) return;
@@ -101,9 +223,14 @@ export function NotesPane() {
       },
       li(props) {
         return <li className="my-1" {...props} />;
+      },
+      img(props) {
+        const src = typeof props.src === "string" ? props.src.trim() : "";
+        if (!src) return null;
+        return <MarkdownImage src={src} alt={props.alt} title={props.title} assetBase={markdownAssetBase} />;
       }
     }),
-    [requestPdfOpen]
+    [markdownAssetBase, requestPdfOpen]
   );
 
   useEffect(() => {
@@ -153,7 +280,7 @@ export function NotesPane() {
                 className="notes-editor"
                 value={notes}
                 height="100%"
-                extensions={[markdown(), EditorView.lineWrapping]}
+                extensions={[markdown(), editorHighlightExtension, EditorView.lineWrapping]}
                 onChange={(value) => setNotes(value)}
                 onCreateEditor={(view) => setEditorView(view)}
                 basicSetup={{ lineNumbers: true, foldGutter: true }}

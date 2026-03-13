@@ -15,6 +15,11 @@ import { useAppStore } from "../../stores/appStore";
 import { ChatMessage } from "../../types";
 import { t } from "../../i18n";
 
+type ReplayableAction = {
+  kind: "command" | "chat";
+  value: string;
+};
+
 const TEXT_FILE_EXTENSIONS = [
   ".txt",
   ".md",
@@ -97,6 +102,12 @@ const clampMenuPosition = (x: number, y: number) => {
   };
 };
 
+const isErrorLikeMessage = (message: ChatMessage) =>
+  message.role === "assistant" &&
+  ((message.source ?? "chat") === "error" ||
+    /^error\s*:/i.test(message.content.trim()) ||
+    /request failed|invalid api key|timeout|network|unauthorized|forbidden/i.test(message.content));
+
 export function AgentPane() {
   const [input, setInput] = useState("");
   const [loading, setLoading] = useState(false);
@@ -114,17 +125,28 @@ export function AgentPane() {
   const showThinking = useAppStore((s) => s.settings.showThinking);
   const enableAgentAttachments = useAppStore((s) => s.settings.enableAgentAttachments);
   const includeProjectContextInChat = useAppStore((s) => s.settings.includeProjectContextInChat);
+  const hideCommandMessages = useAppStore((s) => s.settings.hideCommandMessages);
   const setSettings = useAppStore((s) => s.setSettings);
   const setActiveDialog = useAppStore((s) => s.setActiveDialog);
   const createDialog = useAppStore((s) => s.createDialog);
   const deleteDialog = useAppStore((s) => s.deleteDialog);
+  const pdfPath = useAppStore((s) => s.pdfPath);
+  const pdfName = useAppStore((s) => s.pdfName);
+  const currentPage = useAppStore((s) => s.currentPage);
+  const currentPageText = useAppStore((s) => s.currentPageText);
+  const pageTextCache = useAppStore((s) => s.pageTextCache);
   const language = useAppStore((s) => s.settings.language);
   const messageListRef = useRef<HTMLDivElement | null>(null);
   const attachmentZoneRef = useRef<HTMLDivElement | null>(null);
+  const lastReplayableActionRef = useRef<ReplayableAction | null>(null);
 
   const activeDialog = dialogs.find((dialog) => dialog.id === activeDialogId) ?? dialogs[0];
   const sorted = useMemo(() => [...(activeDialog?.messages ?? [])].sort((a, b) => a.createdAt - b.createdAt), [activeDialog]);
   const pairedMessages = useMemo(() => pairCommandMessages(sorted), [sorted]);
+  const visibleItems = useMemo(
+    () => (hideCommandMessages ? pairedMessages.filter((item) => item.kind !== "command") : pairedMessages),
+    [hideCommandMessages, pairedMessages]
+  );
   const latestMessage = sorted[sorted.length - 1];
 
   const scrollToBottom = (behavior: ScrollBehavior = "smooth") => {
@@ -148,7 +170,7 @@ export function AgentPane() {
 
   useEffect(() => {
     scrollToBottom(loading ? "auto" : "smooth");
-  }, [activeDialogId, latestMessage?.id, latestMessage?.content, latestMessage?.reasoning, loading, pairedMessages.length]);
+  }, [activeDialogId, latestMessage?.id, latestMessage?.content, latestMessage?.reasoning, loading, visibleItems.length]);
 
   useEffect(() => {
     const closeMenu = () => setContextMenu(null);
@@ -163,12 +185,9 @@ export function AgentPane() {
   useEffect(() => {
     const onRefresh = (event: Event) => {
       const detail = (event as CustomEvent<{ target?: string }>).detail;
-      if (!detail?.target || detail.target === "agent") {
+      if (!detail?.target || detail.target === "agent" || detail.target === "cache") {
         scrollToBottom("auto");
         setContextMenu(null);
-      }
-      if (detail?.target === "cache") {
-        scrollToBottom("auto");
       }
     };
     window.addEventListener("agent:refresh", onRefresh as EventListener);
@@ -196,7 +215,8 @@ export function AgentPane() {
     addAttachment({
       id: `${Date.now()}-${Math.random().toString(36).slice(2, 8)}`,
       name: fallbackName ?? path.split(/[\\/]/).pop() ?? path,
-      content: pages.join("\n\n").slice(0, 48000)
+      content: pages.join("\n\n").slice(0, 48000),
+      sourcePath: path
     });
   };
 
@@ -210,7 +230,20 @@ export function AgentPane() {
     addAttachment({
       id: `${Date.now()}-${Math.random().toString(36).slice(2, 8)}`,
       name: path.split(/[\\/]/).pop() ?? path,
-      content
+      content,
+      sourcePath: path
+    });
+  };
+
+  const addCurrentPdfPageAttachment = async (page = currentPage) => {
+    const textValue = pageTextCache[page] ?? (page === currentPage ? currentPageText : "");
+    if (!pdfPath || !textValue.trim()) return;
+    addAttachment({
+      id: `${Date.now()}-${Math.random().toString(36).slice(2, 8)}`,
+      name: `${pdfName || pdfPath.split(/[\\/]/).pop() || "PDF"}#page-${page}`,
+      content: textValue.trim(),
+      page,
+      sourcePath: pdfPath
     });
   };
 
@@ -267,7 +300,9 @@ export function AgentPane() {
       .filter((file): file is File => file !== null);
     const fallbackFiles = Array.from(dataTransfer.files) as Array<File & { path?: string }>;
     logDrag(
-      `[AGENT] html drop inspect items=${dataTransfer.items?.length ?? 0} files=${dataTransfer.files?.length ?? 0} names=${[...itemFiles, ...fallbackFiles].map((file) => file.name).join(",")}`
+      `[AGENT] html drop inspect items=${dataTransfer.items?.length ?? 0} files=${dataTransfer.files?.length ?? 0} names=${[...itemFiles, ...fallbackFiles]
+        .map((file) => file.name)
+        .join(",")}`
     );
     return itemFiles.length > 0 ? (itemFiles as Array<File & { path?: string }>) : fallbackFiles;
   };
@@ -331,7 +366,10 @@ export function AgentPane() {
     const selected = await open({
       multiple: true,
       filters: [
-        { name: "Compatible files", extensions: ["txt", "md", "json", "csv", "log", "pdf", "ts", "tsx", "js", "jsx", "py", "java", "c", "cpp", "h", "hpp", "rs", "go", "rb", "php", "html", "css", "scss", "xml", "yaml", "yml", "toml", "ini", "sh", "bat"] },
+        {
+          name: "Compatible files",
+          extensions: ["txt", "md", "json", "csv", "log", "pdf", "ts", "tsx", "js", "jsx", "py", "java", "c", "cpp", "h", "hpp", "rs", "go", "rb", "php", "html", "css", "scss", "xml", "yaml", "yml", "toml", "ini", "sh", "bat"]
+        },
         { name: "All", extensions: ["*"] }
       ]
     });
@@ -350,49 +388,97 @@ export function AgentPane() {
     await acceptDroppedFiles(event.dataTransfer);
   };
 
-  const submitCurrentInput = async () => {
-    const value = input.trim();
-    if (!value || !activeDialog) return;
+  const runChatCompletion = async (dialogId: string, history: ChatMessage[], assistantMessageId?: string) => {
+    let targetAssistantId = assistantMessageId;
+    if (!targetAssistantId) {
+      const assistantMessage = commandService.createMessage("assistant", "", "chat");
+      targetAssistantId = assistantMessage.id;
+      addMessage(assistantMessage, dialogId);
+    } else {
+      updateMessage(targetAssistantId, { content: "", reasoning: "", source: "chat" });
+    }
 
-    setInput("");
+    let streamedReply = "";
+    let streamedReasoning = "";
+    try {
+      const reply = await llmService.sendChatStream(history, {
+        onToken: (token) => {
+          streamedReply += token;
+          updateMessage(targetAssistantId, { content: streamedReply, source: "chat" });
+        },
+        onReasoning: (token) => {
+          streamedReasoning += token;
+          updateMessage(targetAssistantId, { reasoning: streamedReasoning, source: "chat" });
+        }
+      });
+
+      updateMessage(targetAssistantId, { content: reply, reasoning: streamedReasoning, source: "chat" });
+      setLastAIReply(reply);
+      return reply;
+    } catch (error) {
+      const message = error instanceof Error ? error.message : typeof error === "string" ? error : JSON.stringify(error);
+      updateMessage(targetAssistantId, { content: `Error: ${message}`, reasoning: "", source: "error" });
+      setLastAIReply("");
+      throw error;
+    }
+  };
+
+  const executeSubmission = async (submittedValue: string, options?: { remember?: boolean }) => {
+    if (!activeDialog) return;
+    const value = submittedValue.trim();
+    if (!value) return;
+
+    const remember = options?.remember ?? true;
     setLoading(true);
-    let assistantMessageId: string | null = null;
     try {
       if (value.startsWith(">>")) {
-        const commandMessage = commandService.createMessage("user", value, "command");
-        addMessage(commandMessage, activeDialog.id);
+        if (value.toLowerCase() === ">>prev") {
+          addMessage(commandService.createMessage("user", value, "command"), activeDialog.id);
+          const previous = lastReplayableActionRef.current;
+          if (!previous) {
+            addMessage(
+              commandService.createMessage(
+                "assistant",
+                language === "en" ? "Basic command: no previous action to repeat" : "基础指令：没有可重复的上一条操作",
+                "command"
+              ),
+              activeDialog.id
+            );
+            return;
+          }
+
+          addMessage(
+            commandService.createMessage(
+              "assistant",
+              language === "en"
+                ? `Basic command: repeated previous ${previous.kind === "chat" ? "chat" : "command"}`
+                : `基础指令：已重复上一条${previous.kind === "chat" ? "对话" : "指令"}`,
+              "command"
+            ),
+            activeDialog.id
+          );
+          await executeSubmission(previous.value, { remember: false });
+          return;
+        }
+
+        addMessage(commandService.createMessage("user", value, "command"), activeDialog.id);
         const result = await commandService.execute(value);
         addMessage(commandService.createMessage("assistant", result, "command"), activeDialog.id);
+        if (remember) {
+          lastReplayableActionRef.current = { kind: "command", value };
+        }
         return;
       }
 
       const userMessage = commandService.createMessage("user", value, "chat");
       addMessage(userMessage, activeDialog.id);
-      const assistantMessage = commandService.createMessage("assistant", "", "chat");
-      assistantMessageId = assistantMessage.id;
-      addMessage(assistantMessage, activeDialog.id);
-
-      const snapshot = [...activeDialog.messages, userMessage];
-      let streamedReply = "";
-      let streamedReasoning = "";
-      const reply = await llmService.sendChatStream(snapshot, {
-        onToken: (token) => {
-          streamedReply += token;
-          updateMessage(assistantMessage.id, { content: streamedReply });
-        },
-        onReasoning: (token) => {
-          streamedReasoning += token;
-          updateMessage(assistantMessage.id, { reasoning: streamedReasoning });
-        }
-      });
-
-      updateMessage(assistantMessage.id, { content: reply });
-      setLastAIReply(reply);
+      await runChatCompletion(activeDialog.id, [...activeDialog.messages, userMessage]);
+      if (remember) {
+        lastReplayableActionRef.current = { kind: "chat", value };
+      }
     } catch (error) {
-      const message = error instanceof Error ? error.message : typeof error === "string" ? error : JSON.stringify(error);
-      if (assistantMessageId) {
-        updateMessage(assistantMessageId, { content: `Error: ${message}`, source: "error" });
-      } else {
+      if (value.startsWith(">>")) {
+        const message = error instanceof Error ? error.message : typeof error === "string" ? error : JSON.stringify(error);
         addMessage(commandService.createMessage("assistant", `Error: ${message}`, "error"), activeDialog.id);
       }
     } finally {
@@ -401,9 +487,32 @@ export function AgentPane() {
     }
   };
 
+  const regenerateMessage = async (messageId: string) => {
+    if (!activeDialog) return;
+    const messageIndex = sorted.findIndex((item) => item.id === messageId);
+    if (messageIndex <= 0) return;
+    const history = sorted.slice(0, messageIndex).filter((item) => (item.source ?? "chat") === "chat");
+    const lastUser = [...history].reverse().find((item) => item.role === "user");
+    if (!lastUser) return;
+
+    setLoading(true);
+    try {
+      await runChatCompletion(activeDialog.id, history, messageId);
+      lastReplayableActionRef.current = { kind: "chat", value: lastUser.content };
+    } catch {
+      // Error state is already written back into the message bubble.
+    } finally {
+      setLoading(false);
+      scrollToBottom("auto");
+    }
+  };
+
   const onSubmit = async (event: FormEvent) => {
     event.preventDefault();
-    await submitCurrentInput();
+    const value = input.trim();
+    if (!value) return;
+    setInput("");
+    await executeSubmission(value);
   };
 
   const menu = contextMenu
@@ -465,16 +574,16 @@ export function AgentPane() {
       </div>
 
       <div ref={messageListRef} className="min-h-0 flex-1 space-y-2 overflow-auto p-2">
-        {pairedMessages.length === 0 && (
+        {visibleItems.length === 0 && (
           <div className="text-sm text-slate-500">
             {t(language, "startDialog")} <code>&gt;&gt;help</code>.
           </div>
         )}
-        {pairedMessages.map((item, index) =>
+        {visibleItems.map((item, index) =>
           item.kind === "command" ? (
-            <div key={`${item.input.id}-${index}`} className="rounded-xl border border-border bg-white/40 p-3 text-sm">
+            <div key={`${item.input.id}-${index}`} className="rounded-xl border border-border bg-white/40 p-3 text-sm dark:bg-slate-900/40">
               <div className="mb-2 text-xs font-semibold text-slate-500">{t(language, "command")}</div>
-              <div className="rounded-lg bg-slate-50 px-3 py-2 font-mono text-xs">{item.input.content}</div>
+              <div className="rounded-lg bg-slate-50 px-3 py-2 font-mono text-xs dark:bg-slate-950/70">{item.input.content}</div>
               <div className="mt-2 whitespace-pre-wrap rounded-lg border border-border px-3 py-2">{item.output?.content ?? t(language, "running")}</div>
             </div>
           ) : (
@@ -491,6 +600,18 @@ export function AgentPane() {
                   {item.message.content}
                 </ReactMarkdown>
               </article>
+              {isErrorLikeMessage(item.message) && (
+                <div className="mt-2">
+                  <button
+                    type="button"
+                    className="rounded border border-border px-2 py-1 text-xs"
+                    disabled={loading}
+                    onClick={() => void regenerateMessage(item.message.id)}
+                  >
+                    {language === "en" ? "Regenerate" : "重新生成"}
+                  </button>
+                </div>
+              )}
             </div>
           )
         )}
@@ -527,6 +648,9 @@ export function AgentPane() {
               <button type="button" className="rounded border border-border px-2 py-1 text-xs" onClick={() => void attachFile()}>
                 {t(language, "addAttachment")}
               </button>
+              <button type="button" className="rounded border border-border px-2 py-1 text-xs disabled:opacity-50" disabled={!pdfPath} onClick={() => void addCurrentPdfPageAttachment()}>
+                {language === "en" ? "Attach page" : "添加当前页"}
+              </button>
               <button
                 type="button"
                 className="rounded border border-border px-2 py-1 text-xs"
@@ -540,6 +664,10 @@ export function AgentPane() {
               <label className="inline-flex items-center gap-2 text-xs">
                 <input type="checkbox" checked={includeProjectContextInChat} onChange={(event) => setSettings({ includeProjectContextInChat: event.target.checked })} />
                 {t(language, "includeProjectContext")}
+              </label>
+              <label className="inline-flex items-center gap-2 text-xs">
+                <input type="checkbox" checked={hideCommandMessages} onChange={(event) => setSettings({ hideCommandMessages: event.target.checked })} />
+                {language === "en" ? "Hide commands" : "隐藏指令"}
               </label>
             </div>
             <div className="text-xs text-slate-500">{dragging ? t(language, "dropFilesActive") : t(language, "dropFiles")}</div>
@@ -565,7 +693,10 @@ export function AgentPane() {
           onKeyDown={(event) => {
             if (event.key === "Enter" && !event.shiftKey) {
               event.preventDefault();
-              void submitCurrentInput();
+              const value = input.trim();
+              if (!value) return;
+              setInput("");
+              void executeSubmission(value);
             }
           }}
           disabled={loading}

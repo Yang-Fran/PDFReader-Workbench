@@ -4,6 +4,26 @@ All notable changes to this project will be documented in this file.
 
 The format is based on Keep a Changelog.
 
+## [2.2.0] - 2026-03-13
+
+### Added
+
+- Current-page-only PDF attachment support in the Agent pane
+- In-place regenerate action for failed AI replies
+- `>>prev` command to repeat the previous action
+- Hide-commands toggle for a cleaner Agent reading view
+- Rust streaming proxy path for local OpenAI-compatible endpoints
+
+### Changed
+
+- Merged system-side Agent context blocks into a single system message for better local-model compatibility
+- Updated README and project brief for the 2.2 release line
+
+### Fixed
+
+- Local endpoint streaming behavior for LM Studio style `localhost` / `127.0.0.1` nodes
+- Prompt assembly failures when combining current-page attachments with injected PDF/Markdown context
+
 ## [2.1.0] - 2026-03-13
 
 ### Added

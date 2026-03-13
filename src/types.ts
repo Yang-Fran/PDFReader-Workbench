@@ -29,6 +29,8 @@ export interface AgentAttachment {
   id: string;
   name: string;
   content: string;
+  page?: number;
+  sourcePath?: string;
 }
 
 export interface WorkspaceFileRef {
@@ -73,6 +75,7 @@ export interface AppSettings {
   showThinking: boolean;
   enableAgentAttachments: boolean;
   includeProjectContextInChat: boolean;
+  hideCommandMessages: boolean;
   chatSystemPrompt: string;
   translationPrompt: string;
   glossary: string;

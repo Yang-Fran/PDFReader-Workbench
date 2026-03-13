@@ -36,16 +36,17 @@ const lines = (...items: Array<[string, string] | string>) =>
 const helpText = () =>
   lines(
     ["基础指令：说明", "Basic commands: description"],
-    [">>help：查看指令帮助", ">>help: show command help"],
-    [">>ocr [页面]/help：OCR 指令", ">>ocr [page]/help: OCR command"],
-    [">>tran [页面|范围]/help/state：翻译指令", ">>tran [page|range]/help/state: translation command"],
-    [">>new (proj/dialog/md) [名称]：新建内容", ">>new (proj/dialog/md) [name]: create content"],
-    [">>open：拉起添加文件对话框", ">>open: open the add-files dialog"],
-    [">>file：显示或聚焦文件栏", ">>file: show or focus the file sidebar"],
+    [">>help：显示指令帮助", ">>help: show command help"],
+    [">>ocr [页码]/help：OCR 指令", ">>ocr [page]/help: OCR command"],
+    [">>tran [页码|范围]/help/state：翻译指令", ">>tran [page|range]/help/state: translation command"],
+    [">>new (proj/dialog/md) [可选名称]：新建内容", ">>new (proj/dialog/md) [optional name]: create content"],
+    [">>open：打开添加文件对话框", ">>open: open the add-files dialog"],
+    [">>file：显示文件栏", ">>file: show the file sidebar"],
     [">>del：删除当前对话", ">>del: delete the current dialog"],
     [">>clear：清除当前上下文", ">>clear: clear the current context"],
+    [">>prev：重复上一条操作", ">>prev: repeat the previous action"],
     [">>refresh [pdf|md|agent|cache]：刷新内容", ">>refresh [pdf|md|agent|cache]: refresh content"],
-    [">>beginner：查看新手教程", ">>beginner: show a beginner guide"],
+    [">>beginner：显示新手教程", ">>beginner: show a beginner guide"],
     [">>quit：退出软件", ">>quit: quit the app"]
   );
 
@@ -54,7 +55,7 @@ const ocrHelpText = () =>
     ["基础指令：说明", "Basic commands: description"],
     [">>ocr：对当前页执行 OCR", ">>ocr: run OCR on the current page"],
     [">>ocr 8：跳到第 8 页并执行 OCR", ">>ocr 8: jump to page 8 and run OCR"],
-    [">>ocr help：查看 OCR 帮助", ">>ocr help: show OCR help"]
+    [">>ocr help：显示 OCR 帮助", ">>ocr help: show OCR help"]
   );
 
 const tranHelpText = () =>
@@ -62,8 +63,8 @@ const tranHelpText = () =>
     ["基础指令：说明", "Basic commands: description"],
     [">>tran：翻译当前页", ">>tran: translate the current page"],
     [">>tran 8：翻译第 8 页", ">>tran 8: translate page 8"],
-    [">>tran 3-5：翻译第 3 到 5 页", ">>tran 3-5: translate pages 3 to 5"],
-    [">>tran help：查看翻译帮助", ">>tran help: show translation help"]
+    [">>tran 3-5：翻译第 3 到第 5 页", ">>tran 3-5: translate pages 3 to 5"],
+    [">>tran help：显示翻译帮助", ">>tran help: show translation help"]
   );
 
 const newHelpText = () =>
@@ -71,19 +72,19 @@ const newHelpText = () =>
     ["基础指令：说明", "Basic commands: description"],
     [">>new proj：新建项目", ">>new proj: create a new project"],
     [">>new dialog [名称]：新建对话", ">>new dialog [name]: create a new dialog"],
-    [">>new md [名称]：清空并命名 Markdown", ">>new md [name]: reset and rename Markdown"],
-    [">>new help：查看新建帮助", ">>new help: show create help"]
+    [">>new md [名称]：新建 Markdown", ">>new md [name]: reset and rename Markdown"],
+    [">>new help：显示新建帮助", ">>new help: show create help"]
   );
 
 const beginnerText = () =>
   lines(
     ["新手教程：快速开始", "Beginner guide: quick start"],
-    ["1. 用左侧文件栏导入或挂载 PDF 和 Markdown 文件。", "1. Use the left sidebar to import or mount PDF and Markdown files."],
-    ["2. 打开 PDF 后，滚动页面会自动同步翻译队列。", "2. After opening a PDF, scrolling pages keeps the translation queue in sync."],
-    ["3. 在 Markdown 区可插入选中文本、引用块和 AI 回复。", "3. In Markdown you can insert selections, quote blocks, and AI replies."],
-    ["4. 在 Agent 输入框输入普通问题即可对话，输入 >>help 可查看指令。", "4. Ask normal questions in Agent, or enter >>help to see commands."],
-    ["5. 常用指令：>>tran、>>ocr、>>refresh、>>clear。", "5. Common commands: >>tran, >>ocr, >>refresh, >>clear."],
-    ["6. 记得保存项目，程序会一起保存 Markdown 和缓存索引。", "6. Save the project to persist Markdown and cache indexes together."]
+    ["1. 用左侧文件栏导入或挂载 PDF 和 Markdown。", "1. Use the left sidebar to import or mount PDF and Markdown files."],
+    ["2. 打开 PDF 后，翻页会驱动 OCR/翻译上下文同步。", "2. After opening a PDF, paging keeps OCR and translation context in sync."],
+    ["3. 在 Markdown 中整理笔记、插入引用块和 AI 回复。", "3. Use Markdown to organize notes, insert quote blocks, and keep AI replies."],
+    ["4. 在 Agent 中直接提问，或输入 >>help 查看指令。", "4. Ask questions in Agent directly, or enter >>help to view commands."],
+    ["5. 常用指令包括 >>tran、>>ocr、>>refresh、>>clear、>>prev。", "5. Common commands include >>tran, >>ocr, >>refresh, >>clear, and >>prev."],
+    ["6. 保存项目后，Markdown、翻译缓存和 Agent 缓存会一起落盘。", "6. Saving the project persists Markdown, translation cache, and Agent cache together."]
   );
 
 const parsePages = (parts: string[], totalPages: number, currentPage: number) => {
@@ -124,7 +125,7 @@ export const commandService = {
 
     if (name === "quit") {
       await invoke("quit_app");
-      return text("基础指令：程序正在退出", "Basic command: quitting the app");
+      return text("基础指令：正在退出软件", "Basic command: quitting the app");
     }
 
     if (name === "beginner") {
@@ -170,13 +171,19 @@ export const commandService = {
 
       if (target === "dialog") {
         store.createDialog(extraName || undefined);
-        return text(`基础指令：已新建对话${extraName ? ` (${extraName})` : ""}`, `Basic command: created a new dialog${extraName ? ` (${extraName})` : ""}`);
+        return text(
+          `基础指令：已新建对话${extraName ? `（${extraName}）` : ""}`,
+          `Basic command: created a new dialog${extraName ? ` (${extraName})` : ""}`
+        );
       }
 
       if (target === "md") {
         store.setNotes("");
         store.setNotesFilePath(extraName || "");
-        return text(`基础指令：已新建 Markdown${extraName ? ` (${extraName})` : ""}`, `Basic command: created Markdown${extraName ? ` (${extraName})` : ""}`);
+        return text(
+          `基础指令：已新建 Markdown${extraName ? `（${extraName}）` : ""}`,
+          `Basic command: created Markdown${extraName ? ` (${extraName})` : ""}`
+        );
       }
 
       return newHelpText();
@@ -190,7 +197,7 @@ export const commandService = {
         return text("基础指令：页码无效", "Basic command: invalid page number");
       }
       emit("agent:ocr-request", { page });
-      return text(`基础指令：已对第 ${page} 页发起 OCR`, `Basic command: started OCR for page ${page}`);
+      return text(`基础指令：已开始第 ${page} 页 OCR`, `Basic command: started OCR for page ${page}`);
     }
 
     if (name === "tran") {
@@ -242,35 +249,27 @@ export const commandService = {
       emit("agent:refresh", { target: "pdf" });
 
       if (completedPages.length === 0) {
-        return text("基础指令：没有可翻译的页面文本", "Basic command: no page text available for translation");
+        return text("基础指令：当前没有可用于翻译的页文本", "Basic command: no page text available for translation");
       }
 
-      return text(
-        `基础指令：已完成翻译页面 ${completedPages.join(", ")}`,
-        `Basic command: translated pages ${completedPages.join(", ")}`
-      );
+      return text(`基础指令：已翻译页面 ${completedPages.join(", ")}`, `Basic command: translated pages ${completedPages.join(", ")}`);
     }
 
     if (name === "refresh") {
       const target = (rest[0] ?? "").toLowerCase();
       if (!target || !["pdf", "md", "agent", "cache"].includes(target)) {
-        return text(
-          "基础指令：用法 >>refresh pdf|md|agent|cache",
-          "Basic command: usage >>refresh pdf|md|agent|cache"
-        );
+        return text("基础指令：用法 >>refresh pdf|md|agent|cache", "Basic command: usage >>refresh pdf|md|agent|cache");
       }
 
-      if (target === "cache") {
-        if (store.projectPath) {
-          await workspaceService.syncProjectCaches(store.projectPath);
-        }
+      if (target === "cache" && store.projectPath) {
+        await workspaceService.syncProjectCaches(store.projectPath);
       }
 
       emit("agent:refresh", { target });
       return text(`基础指令：已刷新 ${target}`, `Basic command: refreshed ${target}`);
     }
 
-    return text("基础指令：未知指令，输入 >>help 查看帮助", "Basic command: unknown command, enter >>help for help");
+    return text("基础指令：未知指令，请输入 >>help 查看帮助", "Basic command: unknown command, enter >>help for help");
   },
 
   createMessage

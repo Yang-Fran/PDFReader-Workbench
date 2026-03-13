@@ -1,6 +1,6 @@
 [package]
 name = "pdfreader_workbench"
-version = "2.1.0"
+version = "2.2.0"
 description = "PDF Reader Workbench"
 authors = ["you"]
 edition = "2021"
@@ -19,4 +19,4 @@ tauri = { version = "=2.10.3", features = [] }
 tauri-plugin-dialog = "=2.6.0"
 tauri-plugin-fs = "=2.4.5"
 tauri-plugin-http = "=2.5.2"
-reqwest = { version = "0.12", default-features = false, features = ["json", "rustls-tls"] }
+reqwest = { version = "0.12", default-features = false, features = ["json", "rustls-tls", "stream"] }

@@ -23,6 +23,10 @@
   --code-inline-bg: #eef2f7;
   --code-block-bg: #f7fafc;
   --code-block-text: #1e293b;
+  --table-bg: #fcfdff;
+  --table-head-bg: #eaf1fb;
+  --table-row-alt: #f6f9fc;
+  --table-border: #cfd8e3;
 }
 
 :root[data-theme="dark"] {
@@ -44,6 +48,10 @@
   --code-inline-bg: rgba(15, 23, 42, 0.6);
   --code-block-bg: #0f172a;
   --code-block-text: #e2e8f0;
+  --table-bg: #0f1b2c;
+  --table-head-bg: #16253a;
+  --table-row-alt: #132033;
+  --table-border: #31435e;
 }
 
 html,
@@ -285,6 +293,72 @@ body {
   color: inherit;
 }
 
+.markdown-preview table {
+  width: 100%;
+  overflow: hidden;
+  border-collapse: collapse;
+  border: 1px solid var(--table-border);
+  border-radius: 10px;
+  background: var(--table-bg);
+  box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--table-border) 35%, transparent);
+}
+
+.markdown-preview thead {
+  background: var(--table-head-bg);
+}
+
+.markdown-preview th,
+.markdown-preview td {
+  border: 1px solid var(--table-border);
+  padding: 0.6rem 0.75rem;
+  text-align: left;
+  vertical-align: top;
+}
+
+.markdown-preview th {
+  color: var(--text-main);
+  font-weight: 700;
+}
+
+.markdown-preview tbody tr:nth-child(even) {
+  background: var(--table-row-alt);
+}
+
+.markdown-preview tbody tr:hover {
+  background: color-mix(in srgb, var(--accent-soft) 40%, var(--table-bg));
+}
+
+.markdown-image-wrap {
+  display: flex;
+  flex-direction: column;
+  gap: 0.4rem;
+  margin: 0.9rem 0;
+}
+
+.markdown-image {
+  max-width: 100%;
+  border: 1px solid var(--border-color);
+  border-radius: 12px;
+  background: color-mix(in srgb, var(--panel-bg) 76%, white 24%);
+  box-shadow: 0 10px 24px rgba(15, 23, 42, 0.08);
+}
+
+.markdown-image-caption {
+  color: var(--text-muted);
+  font-size: 12px;
+  text-align: center;
+}
+
+.markdown-image-error {
+  display: block;
+  border: 1px dashed var(--table-border);
+  border-radius: 12px;
+  background: color-mix(in srgb, var(--panel-bg) 78%, transparent);
+  padding: 0.85rem 1rem;
+  color: var(--text-muted);
+  font-size: 13px;
+}
+
 .markdown-code-block {
   overflow: auto;
   border-radius: 8px;
@@ -394,4 +468,32 @@ body {
 .notes-editor .cm-foldPlaceholder {
   background: color-mix(in srgb, var(--panel-bg) 82%, transparent) !important;
   border-color: var(--border-color) !important;
+}
+
+.notes-editor .cm-content .cm-inlineCode,
+.notes-editor .cm-content .cm-codeMark,
+.notes-editor .cm-content .cm-codeBlock,
+.notes-editor .cm-content .cm-fencedCode,
+.notes-editor .cm-content .cm-formatting-code,
+.notes-editor .cm-content .cm-formatting-codeBlock,
+.notes-editor .cm-content .cm-formatting,
+.notes-editor .cm-content .tok-monospace,
+.notes-editor .cm-content .tok-string,
+.notes-editor .cm-content .tok-meta,
+.notes-editor .cm-content .tok-processingInstruction,
+.notes-editor .cm-content .tok-labelName,
+.notes-editor .cm-content .tok-special {
+  color: var(--code-block-text) !important;
+}
+
+.notes-editor .cm-content .cm-formatting-codeBlock {
+  opacity: 0.88;
+}
+
+.notes-editor .cm-content .cm-formatting,
+.notes-editor .cm-content .tok-meta,
+.notes-editor .cm-content .tok-processingInstruction,
+.notes-editor .cm-content .tok-labelName,
+.notes-editor .cm-content .tok-special {
+  color: color-mix(in srgb, var(--code-block-text) 90%, var(--text-muted)) !important;
 }

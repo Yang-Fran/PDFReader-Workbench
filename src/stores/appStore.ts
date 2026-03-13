@@ -39,6 +39,7 @@ const defaultSettings: AppSettings = {
   showThinking: true,
   enableAgentAttachments: true,
   includeProjectContextInChat: true,
+  hideCommandMessages: false,
   chatSystemPrompt: "",
   translationPrompt: "",
   glossary: ""
