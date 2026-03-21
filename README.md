@@ -119,7 +119,6 @@ cargo check
 
 - Contributor workflow: [CONTRIBUTING.md](./CONTRIBUTING.md)
 - Recent changes: [CHANGELOG.md](./CHANGELOG.md)
-- Quick context handoff: [pre-input.txt](./pre-input.txt)
 
 ## License
 
