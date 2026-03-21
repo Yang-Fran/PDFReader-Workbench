@@ -1,6 +1,6 @@
 [package]
 name = "pdfreader_workbench"
-version = "2.2.0"
+version = "2.4.0"
 description = "PDF Reader Workbench"
 authors = ["you"]
 edition = "2021"
@@ -20,3 +20,14 @@ tauri-plugin-dialog = "=2.6.0"
 tauri-plugin-fs = "=2.4.5"
 tauri-plugin-http = "=2.5.2"
 reqwest = { version = "0.12", default-features = false, features = ["json", "rustls-tls", "stream"] }
+regex = "1"
+
+[target.'cfg(target_os = "windows")'.dependencies]
+webview2-com = "0.38.2"
+windows = { version = "0.61.3", features = [
+  "Win32_Foundation",
+  "Win32_System_Com",
+  "Win32_System_LibraryLoader",
+  "Win32_UI_WindowsAndMessaging",
+] }
+

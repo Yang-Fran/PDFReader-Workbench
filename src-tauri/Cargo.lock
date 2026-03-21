@@ -2233,8 +2233,9 @@ dependencies = [
 
 [[package]]
 name = "pdfreader_workbench"
-version = "2.2.0"
+version = "2.4.0"
 dependencies = [
+ "regex",
  "reqwest 0.12.28",
  "serde",
  "serde_json",
@@ -2243,6 +2244,8 @@ dependencies = [
  "tauri-plugin-dialog",
  "tauri-plugin-fs",
  "tauri-plugin-http",
+ "webview2-com",
+ "windows",
 ]
 
 [[package]]

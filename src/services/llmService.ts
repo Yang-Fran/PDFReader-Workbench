@@ -1,7 +1,7 @@
 import { invoke } from "@tauri-apps/api/core";
 import { listen } from "@tauri-apps/api/event";
 import { fetch as tauriFetch } from "@tauri-apps/plugin-http";
-import { AgentAttachment, ChatMessage } from "../types";
+import { AgentAttachment, ChatMessage, TranslationExecutionMode } from "../types";
 import { useAppStore } from "../stores/appStore";
 import { debugLogger } from "./debugLogger";
 
@@ -46,7 +46,7 @@ interface ProxyStreamEvent {
 }
 
 const DEFAULT_TRANSLATION_PROMPT =
-  "You are an academic translator. Translate the input into polished Chinese. Output only the final translation content. Do not include explanations, notes, headings, or reasoning.";
+  "You are an academic translator. Translate the input into polished Chinese. Preserve heading hierarchy and paragraph structure. Add an extra blank line around headings and between distinct paragraphs when it improves readability. Output only the final translation content. Do not include explanations, notes, headings, or reasoning.";
 
 const resolveChatEndpoint = (rawBaseUrl: string) => {
   const base = rawBaseUrl.trim().replace(/\/+$/, "");
@@ -367,12 +367,25 @@ export const llmService = {
     return postChat(buildChatPayload(messages));
   },
 
+  async sendChatBySettings(messages: ChatMessage[], callbacks?: StreamCallbacks): Promise<string> {
+    return useAppStore.getState().settings.enableAgentStreaming ? postChatStream(buildChatPayload(messages), callbacks) : postChat(buildChatPayload(messages), callbacks?.signal);
+  },
+
   async sendChatStream(messages: ChatMessage[], callbacks?: StreamCallbacks): Promise<string> {
     return postChatStream(buildChatPayload(messages), callbacks);
   },
 
   async translatePage(text: string, signal?: AbortSignal): Promise<string> {
     return postChat(buildTranslationPayload(text), signal, { extraPayload: { enable_thinking: false } });
+  },
+
+  async translatePageByMode(text: string, mode: TranslationExecutionMode, callbacks?: StreamCallbacks): Promise<string> {
+    if (mode === "stream") return postChatStream(buildTranslationPayload(text), callbacks, { extraPayload: { enable_thinking: false } });
+    return postChat(buildTranslationPayload(text), callbacks?.signal, { extraPayload: { enable_thinking: false } });
+  },
+
+  async translatePageBySettings(text: string, callbacks?: StreamCallbacks): Promise<string> {
+    return this.translatePageByMode(text, useAppStore.getState().settings.enableTranslationStreaming ? "stream" : "expli", callbacks);
   },
 
   async translatePageStream(text: string, callbacks?: StreamCallbacks): Promise<string> {

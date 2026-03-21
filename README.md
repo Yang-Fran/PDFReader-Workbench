@@ -1,75 +1,64 @@
 # PDF Reader Workbench
 
-PDF Reader Workbench is a Windows desktop workspace for reading PDFs, running OCR, translating pages, writing Markdown notes, and working with an AI agent in one project file.
+PDF Reader Workbench is a Windows desktop workspace for reading PDFs, running OCR, translating pages, writing Markdown notes, and working with an AI agent in one project.
 
-Current release: `v2.2.0`
+## What It Does
 
-## Overview
-
-The application is built with Tauri 2, React 18, TypeScript, Vite, Zustand, and Tailwind. It is designed for paper reading, course material review, and document-centered AI workflows.
-
-Core capabilities:
 - Open local PDF and Markdown files inside one workspace
 - Run OCR on pages without a usable text layer
 - Translate PDF pages through an OpenAI-compatible API
-- Keep Markdown notes and PDF quote blocks linked to source pages
-- Use a multi-dialog AI agent with Markdown-rendered replies
-- Attach files, attach the current PDF page only, or inject current PDF and Markdown context
+- Keep Markdown notes, PDF quotes, and AI replies together
+- Render Markdown with HTML blocks, math, custom links, images, and attachments
+- Export Markdown notes to PDF through the system WebView print pipeline
 - Save and reopen `.pdfwb` projects with external cache directories
+
+## Current Stack
+
+- Tauri 2
+- React 18
+- TypeScript
+- Vite
+- Zustand
+- Tailwind
+
+## Markdown And PDF Export
+
+The current Markdown to PDF path is:
+
+1. CodeMirror for editing
+2. A normalization layer for custom tags and asset resolution
+3. `markdown-it` for Markdown to HTML
+4. MathJax for formula layout
+5. A print transform plus print CSS for stable pagination
+6. Tauri native export through the system WebView
+
+Important notes:
+
+- The app no longer depends on bundled Chromium for PDF export
+- Windows export uses the installed WebView2 runtime
+- Relative and absolute asset paths are normalized before preview and export
+- Markdown preview and PDF export share the same rendering pipeline
 
 ## Quick Start
 
-### Install
-
-Use one of the Windows installers from the latest release:
-- `PDF Reader Workbench_2.2.0_x64-setup.exe`
-- `PDF Reader Workbench_2.2.0_x64_en-US.msi`
-
-### Open a workspace
-
 1. Launch the app.
-2. Create a new project or open an existing `.pdfwb` file.
-3. Add PDF and Markdown files from the left file sidebar.
-4. Configure your API endpoint, API key, and model in Settings.
+2. Click `New project`.
+3. Open `Settings` and fill in `Base URL`, `API Key`, and `Model`.
+4. Click `Save project` to create a `.pdfwb` file.
+5. Add PDF and Markdown files from the Files sidebar.
+6. Open a PDF, run OCR or translation if needed, and write notes in Markdown.
 
-### Basic workflow
+When a new project is created, the first dialog is seeded with the same guide shown by `>>beginner`.
 
-1. Open a PDF and move to the target page.
-2. Run OCR or translation on the current page.
-3. Insert selected text, PDF quotes, or AI replies into Markdown notes.
-4. Ask questions in the Agent pane and keep multiple dialogs per project.
-5. Save the project to persist notes and cache indexes.
-
-## Interface
-
-### Left sidebar
-
-- Project-local PDF and Markdown files
-- Mounted external files
-- Collapsible file tree grouped by file type
-
-### Center workspace
-
-- PDF pane with page jump, OCR, translation, and layer controls
-- Markdown editor and preview
-
-### Right sidebar
-
-- Multi-dialog AI agent
-- Markdown-rendered answers
-- Attachment uploads and current-page attachment
-- Command mode with `>>...`
-
-## Agent commands
+## Agent Commands
 
 - `>>help`
 - `>>ocr [page]/help`
-- `>>tran [page|range]/help/state`
+- `>>tran [page|range] [stream|expli] [force]/help/state`
 - `>>new proj`
 - `>>new dialog [name]`
 - `>>new md [name]`
 - `>>open`
-- `>>file`
 - `>>del`
 - `>>clear`
 - `>>prev`
@@ -79,34 +68,58 @@ Use one of the Windows installers from the latest release:
 
 Commands are case-insensitive.
 
-## LLM and networking
+## Project Layout
 
-- Chat and translation use OpenAI-compatible `/chat/completions`
-- Translation requests force `enable_thinking: false`
-- Remote endpoints use frontend streaming when available
-- Local endpoints such as `127.0.0.1` and `localhost` use a Rust streaming proxy for more stable token streaming
-- If a request path fails, the app falls back through multiple transport layers
+- Project file: `.pdfwb`
+- Translation cache: `translation_cache/`
+- Agent cache: `llm_cache/`
 
-## Project and cache layout
-
-Project files use `.pdfwb`.
-
-The actual cache payloads are stored beside the project file:
-- `translation_cache/`
-- `llm_cache/`
-
-This keeps the project file lightweight while preserving:
-- per-PDF translation cache
-- agent dialog cache
-- project state cache
+This keeps the project file lightweight while preserving notes, translation cache, agent dialogs, and workspace state.
 
 ## Development
 
-Developer setup, contribution workflow, and project structure are documented in [CONTRIBUTING.md](./CONTRIBUTING.md).
+Install dependencies:
 
-## Changelog
+```powershell
+npm install
+```
 
-Release notes are tracked in [CHANGELOG.md](./CHANGELOG.md).
+Run the desktop app in development:
+
+```powershell
+npm run tauri:dev
+```
+
+Run frontend type-check:
+
+```powershell
+npx tsc --noEmit
+```
+
+Run backend validation:
+
+```powershell
+cd src-tauri
+cargo check
+```
+
+## Key Files
+
+- App shell: `src/App.tsx`
+- Store: `src/stores/appStore.ts`
+- Agent pane: `src/components/agent/AgentPane.tsx`
+- Notes pane: `src/components/notes/NotesPane.tsx`
+- Settings: `src/components/settings/SettingsPanel.tsx`
+- Markdown export service: `src/services/pdfExportService.ts`
+- Beginner guide text: `src/services/beginnerGuide.ts`
+- Tauri backend: `src-tauri/src/lib.rs`
+- Windows native PDF export: `src-tauri/src/native_pdf_export_windows.rs`
+
+## More Docs
+
+- Contributor workflow: [CONTRIBUTING.md](./CONTRIBUTING.md)
+- Recent changes: [CHANGELOG.md](./CHANGELOG.md)
+- Quick context handoff: [pre-input.txt](./pre-input.txt)
 
 ## License
 

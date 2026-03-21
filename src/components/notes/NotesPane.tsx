@@ -1,43 +1,23 @@
-import { useEffect, useMemo, useState } from "react";
+import { MouseEvent, useEffect, useMemo, useRef, useState } from "react";
 import { invoke } from "@tauri-apps/api/core";
+import { save } from "@tauri-apps/plugin-dialog";
 import CodeMirror from "@uiw/react-codemirror";
 import { markdown } from "@codemirror/lang-markdown";
 import { HighlightStyle, syntaxHighlighting } from "@codemirror/language";
 import { EditorView } from "@codemirror/view";
 import { tags } from "@lezer/highlight";
-import ReactMarkdown from "react-markdown";
-import type { Components } from "react-markdown";
-import remarkGfm from "remark-gfm";
-import remarkMath from "remark-math";
-import rehypeKatex from "rehype-katex";
 import { Panel, PanelGroup, PanelResizeHandle } from "react-resizable-panels";
+import { MarkdownPreview } from "../markdown/MarkdownPreview";
 import { useAppStore } from "../../stores/appStore";
+import { useToastStore } from "../../stores/toastStore";
 import { t } from "../../i18n";
-
-type QuoteMeta = {
-  name: string;
-  page: number;
-  path: string;
-};
+import { buildMarkdownPdfExportHtml, buildPdfPrintOptions } from "../../services/markdownPrintService";
+import { formatUiError, withTimeout } from "../../utils/textDisplay";
 
 const buildPdfQuoteMarkdown = (quote: { text: string; page: number; pdfPath: string; pdfName: string }) => {
   const meta = JSON.stringify({ name: quote.pdfName, page: quote.page, path: quote.pdfPath });
   return `\`\`\`pdf-quote\n${meta}\n${quote.text.trim()}\n\`\`\``;
 };
-
-const parsePdfQuoteBlock = (value: string): { meta: QuoteMeta; text: string } | null => {
-  const lines = value.replace(/\r\n/g, "\n").split("\n");
-  if (lines.length < 2) return null;
-  try {
-    const meta = JSON.parse(lines[0]) as QuoteMeta;
-    if (!meta || typeof meta.name !== "string" || typeof meta.page !== "number" || typeof meta.path !== "string") return null;
-    return { meta, text: lines.slice(1).join("\n").trim() };
-  } catch {
-    return null;
-  }
-};
-
-const isExternalUrl = (value: string) => /^(https?:|data:|asset:|tauri:|blob:)/i.test(value);
 
 const getDirname = (path: string) => {
   const normalized = path.replace(/\\/g, "/");
@@ -45,117 +25,74 @@ const getDirname = (path: string) => {
   return index >= 0 ? normalized.slice(0, index) : normalized;
 };
 
-const joinPath = (base: string, relative: string) => {
-  if (!base) return relative;
-  const baseParts = base.replace(/\\/g, "/").split("/");
-  const relativeParts = relative.replace(/\\/g, "/").split("/");
-  const segments = [...baseParts];
+const normalizeSyncText = (value: string) =>
+  value
+    .replace(/```[\s\S]*?```/g, " ")
+    .replace(/`[^`]*`/g, " ")
+    .replace(/<[^>]+>/g, " ")
+    .replace(/!\[[^\]]*]\(([^)\n]+)\)/g, " ")
+    .replace(/\[([^\]]+)]\(([^)\n]+)\)/g, "$1")
+    .replace(/\\\(|\\\)|\\\[|\\\]/g, " ")
+    .replace(/\$+/g, " ")
+    .replace(/[#>*_~|[\]()`!-]+/g, " ")
+    .replace(/\s+/g, " ")
+    .trim()
+    .toLowerCase();
 
-  for (const part of relativeParts) {
-    if (!part || part === ".") continue;
-    if (part === "..") {
-      if (segments.length > 0) segments.pop();
-      continue;
-    }
-    segments.push(part);
+const scoreSyncText = (source: string, query: string) => {
+  if (!source || !query) return -1;
+  if (source === query) return 5000 + query.length;
+  if (source.includes(query)) return 4000 + query.length;
+  if (query.includes(source) && source.length >= 6) return 2600 + source.length;
+
+  const queryParts = query.split(" ").filter((part) => part.length >= 2);
+  let overlap = 0;
+  for (const part of queryParts) {
+    if (source.includes(part)) overlap += Math.min(part.length, 16);
   }
-
-  return segments.join("/");
+  return overlap;
 };
 
-const guessImageMimeType = (path: string) => {
-  const lower = path.toLowerCase();
-  if (lower.endsWith(".png")) return "image/png";
-  if (lower.endsWith(".jpg") || lower.endsWith(".jpeg")) return "image/jpeg";
-  if (lower.endsWith(".gif")) return "image/gif";
-  if (lower.endsWith(".webp")) return "image/webp";
-  if (lower.endsWith(".svg")) return "image/svg+xml";
-  if (lower.endsWith(".bmp")) return "image/bmp";
-  return "application/octet-stream";
+const focusEditorWithoutPageScroll = (editorView: EditorView) => {
+  editorView.contentDOM.focus({ preventScroll: true });
 };
-
-function MarkdownImage(props: { src: string; alt?: string; title?: string; assetBase: string }) {
-  const { src, alt, title, assetBase } = props;
-  const [blobUrl, setBlobUrl] = useState("");
-  const [failed, setFailed] = useState(false);
-
-  const resolvedSrc = useMemo(() => {
-    if (!src) return "";
-    if (isExternalUrl(src) || /^[a-zA-Z]:[\\/]/.test(src) || src.startsWith("/")) return src;
-    return joinPath(assetBase, src);
-  }, [assetBase, src]);
-
-  useEffect(() => {
-    let disposed = false;
-    let localUrl = "";
-
-    if (!resolvedSrc || isExternalUrl(resolvedSrc)) {
-      setBlobUrl(resolvedSrc);
-      setFailed(false);
-      return;
-    }
-
-    setBlobUrl("");
-    setFailed(false);
-
-    void (async () => {
-      try {
-        const bytes = await invoke<number[]>("read_binary_file", { path: resolvedSrc });
-        if (disposed) return;
-        const blob = new Blob([new Uint8Array(bytes)], { type: guessImageMimeType(resolvedSrc) });
-        localUrl = URL.createObjectURL(blob);
-        setBlobUrl(localUrl);
-      } catch {
-        if (!disposed) setFailed(true);
-      }
-    })();
-
-    return () => {
-      disposed = true;
-      if (localUrl) URL.revokeObjectURL(localUrl);
-    };
-  }, [resolvedSrc]);
-
-  return (
-    <span className="markdown-image-wrap">
-      {blobUrl && !failed ? (
-        <img
-          src={blobUrl}
-          alt={alt ?? ""}
-          title={title}
-          className="markdown-image"
-          loading="lazy"
-          onError={() => setFailed(true)}
-        />
-      ) : (
-        <span className="markdown-image-error">{alt || src}</span>
-      )}
-      {alt ? <span className="markdown-image-caption">{alt}</span> : null}
-    </span>
-  );
-}
 
 export function NotesPane() {
   const [editorView, setEditorView] = useState<EditorView | null>(null);
   const [refreshTick, setRefreshTick] = useState(0);
+  const [exportBusy, setExportBusy] = useState(false);
+  const previewScrollRef = useRef<HTMLDivElement | null>(null);
 
-  const notes = useAppStore((s) => s.notes);
-  const setNotes = useAppStore((s) => s.setNotes);
-  const appendToNotes = useAppStore((s) => s.appendToNotes);
-  const selectedPdfText = useAppStore((s) => s.selectedPdfText);
-  const selectedPdfQuote = useAppStore((s) => s.selectedPdfQuote);
-  const setSelectedPdfQuote = useAppStore((s) => s.setSelectedPdfQuote);
-  const lastAIReply = useAppStore((s) => s.lastAIReply);
-  const requestPdfOpen = useAppStore((s) => s.requestPdfOpen);
-  const projectPath = useAppStore((s) => s.projectPath);
-  const notesFilePath = useAppStore((s) => s.notesFilePath);
-  const language = useAppStore((s) => s.settings.language);
+  const notes = useAppStore((state) => state.notes);
+  const setNotes = useAppStore((state) => state.setNotes);
+  const appendToNotes = useAppStore((state) => state.appendToNotes);
+  const selectedPdfText = useAppStore((state) => state.selectedPdfText);
+  const selectedPdfQuote = useAppStore((state) => state.selectedPdfQuote);
+  const setSelectedPdfQuote = useAppStore((state) => state.setSelectedPdfQuote);
+  const lastAIReply = useAppStore((state) => state.lastAIReply);
+  const requestPdfOpen = useAppStore((state) => state.requestPdfOpen);
+  const projectPath = useAppStore((state) => state.projectPath);
+  const notesFilePath = useAppStore((state) => state.notesFilePath);
+  const language = useAppStore((state) => state.settings.language);
+  const pdfExport = useAppStore((state) => state.settings.pdfExport);
+  const setSettings = useAppStore((state) => state.setSettings);
+  const pushToast = useToastStore((state) => state.pushToast);
 
   const markdownAssetBase = useMemo(() => {
     if (notesFilePath) return getDirname(notesFilePath);
     if (projectPath) return getDirname(projectPath);
     return "";
   }, [notesFilePath, projectPath]);
+
+  useEffect(() => {
+    if (pdfExport.sourcePath === markdownAssetBase) return;
+    setSettings({
+      pdfExport: {
+        ...pdfExport,
+        sourcePath: markdownAssetBase
+      }
+    });
+  }, [markdownAssetBase, pdfExport, setSettings]);
 
   const editorHighlightExtension = useMemo(
     () =>
@@ -169,6 +106,85 @@ export function NotesPane() {
       ),
     []
   );
+
+  const syncPreviewToEditor = () => {
+    if (!editorView || !previewScrollRef.current) return;
+
+    const docLines = editorView.state.doc.toString().split("\n");
+    const currentLineNumber = editorView.state.doc.lineAt(editorView.state.selection.main.head).number;
+    const windowQueries = [
+      docLines[currentLineNumber - 1] ?? "",
+      [docLines[currentLineNumber - 2] ?? "", docLines[currentLineNumber - 1] ?? ""].join(" "),
+      [docLines[currentLineNumber - 1] ?? "", docLines[currentLineNumber] ?? ""].join(" "),
+      [docLines[currentLineNumber - 2] ?? "", docLines[currentLineNumber - 1] ?? "", docLines[currentLineNumber] ?? ""].join(" ")
+    ]
+      .map(normalizeSyncText)
+      .filter((value, index, array) => value.length >= 2 && array.indexOf(value) === index)
+      .sort((left, right) => right.length - left.length);
+
+    if (windowQueries.length === 0) return;
+
+    const blocks = Array.from(previewScrollRef.current.querySelectorAll<HTMLElement>("[data-md-block='1']"));
+    let bestMatch: { element: HTMLElement; score: number } | null = null;
+
+    for (const element of blocks) {
+      const blockText = normalizeSyncText(element.textContent ?? "");
+      if (!blockText) continue;
+      const score = windowQueries.reduce((best, query) => Math.max(best, scoreSyncText(blockText, query)), -1);
+      if (!bestMatch || score > bestMatch.score) {
+        bestMatch = { element, score };
+      }
+    }
+
+    if (!bestMatch || bestMatch.score < 6) return;
+
+    const container = previewScrollRef.current;
+    const elementRect = bestMatch.element.getBoundingClientRect();
+    const containerRect = container.getBoundingClientRect();
+    const targetScroll =
+      container.scrollTop +
+      (elementRect.top - containerRect.top) -
+      container.clientHeight / 2 +
+      bestMatch.element.clientHeight / 2;
+
+    container.scrollTo({
+      top: Math.max(0, Math.min(targetScroll, container.scrollHeight - container.clientHeight)),
+      behavior: "smooth"
+    });
+  };
+
+  const syncEditorToPreview = (event: MouseEvent<HTMLDivElement>) => {
+    if (!editorView || !previewScrollRef.current) return;
+
+    const block = (event.target as HTMLElement | null)?.closest?.("[data-md-block='1']") as HTMLElement | null;
+    if (!block || !previewScrollRef.current.contains(block)) return;
+
+    const snippet = normalizeSyncText(block.textContent ?? "");
+    if (!snippet) return;
+
+    const docLines = editorView.state.doc.toString().split("\n");
+    let bestLine = -1;
+    let bestScore = -1;
+
+    for (let index = 0; index < docLines.length; index += 1) {
+      const lineText = normalizeSyncText(docLines[index] ?? "");
+      const windowText = normalizeSyncText([docLines[index] ?? "", docLines[index + 1] ?? "", docLines[index + 2] ?? ""].join(" "));
+      const score = Math.max(scoreSyncText(lineText, snippet), scoreSyncText(windowText, snippet));
+      if (score > bestScore) {
+        bestScore = score;
+        bestLine = index + 1;
+      }
+    }
+
+    if (bestLine < 1 || bestScore < 6) return;
+
+    const position = editorView.state.doc.line(bestLine).from;
+    editorView.dispatch({
+      selection: { anchor: position },
+      effects: EditorView.scrollIntoView(position, { y: "center" })
+    });
+    focusEditorWithoutPageScroll(editorView);
+  };
 
   const insertIntoEditor = (value: string) => {
     if (!value) return;
@@ -185,53 +201,45 @@ export function NotesPane() {
     editorView.focus();
   };
 
-  const markdownComponents = useMemo<Components>(
-    () => ({
-      code(props) {
-        const language = props.className?.replace("language-", "") ?? "";
-        const value = String(props.children ?? "");
-        if (language === "pdf-quote") {
-          const parsed = parsePdfQuoteBlock(value);
-          if (!parsed) return <pre>{value}</pre>;
-          return (
-            <blockquote className="pdf-quote-block">
-              <button
-                type="button"
-                className="pdf-quote-header"
-                onClick={() => requestPdfOpen(parsed.meta.path, { preserveState: true, targetPage: parsed.meta.page })}
-              >
-                {parsed.meta.name} / page {parsed.meta.page}
-              </button>
-              <div className="pdf-quote-content whitespace-pre-wrap">{parsed.text}</div>
-            </blockquote>
-          );
-        }
-        if (!value.includes("\n")) {
-          return <code className={props.className}>{props.children}</code>;
-        }
-        return (
-          <pre className="markdown-code-block">
-            <code className={props.className}>{props.children}</code>
-          </pre>
-        );
-      },
-      ul(props) {
-        return <ul className="list-disc pl-6" {...props} />;
-      },
-      ol(props) {
-        return <ol className="list-decimal pl-6" {...props} />;
-      },
-      li(props) {
-        return <li className="my-1" {...props} />;
-      },
-      img(props) {
-        const src = typeof props.src === "string" ? props.src.trim() : "";
-        if (!src) return null;
-        return <MarkdownImage src={src} alt={props.alt} title={props.title} assetBase={markdownAssetBase} />;
-      }
-    }),
-    [markdownAssetBase, requestPdfOpen]
-  );
+  const exportNotesPdf = async () => {
+    const defaultBase =
+      (notesFilePath || projectPath || "notes")
+        .replace(/\.[^.]+$/i, "")
+        .replace(/[\\/]+/g, "/")
+        .split("/")
+        .filter(Boolean)
+        .pop() || "notes";
+    const outputPath = await save({
+      filters: [{ name: "PDF", extensions: ["pdf"] }],
+      defaultPath: `${defaultBase}.pdf`
+    });
+    if (!outputPath) return;
+
+    setExportBusy(true);
+    try {
+      const exportMarkdown = notes || t(language, "writeHere");
+      const exportSettings = { ...pdfExport, sourcePath: markdownAssetBase };
+      const exportMeta = {
+        documentPath: notesFilePath || projectPath || ""
+      };
+      const html = await withTimeout(
+        buildMarkdownPdfExportHtml(exportMarkdown, language, exportSettings, exportMeta),
+        15000,
+        language === "en" ? "Building the PDF document timed out after 15s." : "PDF 导出文档构建在 15 秒后超时。"
+      );
+      await withTimeout(
+        invoke("export_markdown_pdf", { html, outputPath, options: buildPdfPrintOptions(exportSettings, exportMarkdown, language, exportMeta) }),
+        90000,
+        language === "en" ? "PDF export timed out after 90s." : "PDF 导出超过 90 秒仍未返回。"
+      );
+      pushToast(language === "en" ? "PDF exported." : "PDF 已导出。", "success");
+    } catch (error) {
+      console.error("Failed to export markdown PDF", error);
+      pushToast(formatUiError(error, language), "error");
+    } finally {
+      setExportBusy(false);
+    }
+  };
 
   useEffect(() => {
     const onRefresh = (event: Event) => {
@@ -244,13 +252,23 @@ export function NotesPane() {
     return () => window.removeEventListener("agent:refresh", onRefresh as EventListener);
   }, []);
 
+  useEffect(() => {
+    const onExportPdf = () => {
+      if (!exportBusy) {
+        void exportNotesPdf();
+      }
+    };
+    window.addEventListener("app:export-pdf", onExportPdf as EventListener);
+    return () => window.removeEventListener("app:export-pdf", onExportPdf as EventListener);
+  }, [exportBusy, exportNotesPdf]);
+
   return (
     <section className="app-panel flex h-full flex-col rounded border border-border">
       <header className="app-section-header flex items-center justify-between border-b border-border p-2">
         <div>
           <div className="text-sm font-semibold">{t(language, "markdown")}</div>
         </div>
-        <div className="flex gap-2">
+        <div className="flex flex-wrap gap-2">
           <button className="rounded border border-border px-2 py-1 text-xs disabled:opacity-50" onClick={() => insertIntoEditor(selectedPdfText)} disabled={!selectedPdfText}>
             {t(language, "insertSelection")}
           </button>
@@ -274,16 +292,16 @@ export function NotesPane() {
       <div className="min-h-0 flex-1 p-2">
         <PanelGroup direction="vertical" className="h-full min-h-0">
           <Panel defaultSize={56} minSize={20}>
-            <div className="app-card h-full min-h-0 overflow-hidden rounded border border-border">
+            <div className="app-card h-full min-h-0 overflow-hidden rounded border border-border" onDoubleClick={syncPreviewToEditor}>
               <CodeMirror
                 key={`editor-${refreshTick}`}
                 className="notes-editor"
                 value={notes}
                 height="100%"
-                extensions={[markdown(), editorHighlightExtension, EditorView.lineWrapping]}
+                extensions={[markdown({ completeHTMLTags: false }), editorHighlightExtension, EditorView.lineWrapping]}
                 onChange={(value) => setNotes(value)}
                 onCreateEditor={(view) => setEditorView(view)}
-                basicSetup={{ lineNumbers: true, foldGutter: true }}
+                basicSetup={{ lineNumbers: true, foldGutter: true, autocompletion: false }}
               />
             </div>
           </Panel>
@@ -291,14 +309,16 @@ export function NotesPane() {
           <PanelResizeHandle className="resize-handle-y" />
 
           <Panel defaultSize={44} minSize={20}>
-            <div className="app-card h-full overflow-auto rounded border border-border p-3">
+            <div ref={previewScrollRef} className="app-card h-full overflow-auto rounded border border-border p-3" onDoubleClick={syncEditorToPreview}>
               <div className="mb-2 text-xs font-semibold text-slate-500">{t(language, "preview")}</div>
-              <article className="markdown-preview">
-                <div key={`preview-${refreshTick}`}>
-                <ReactMarkdown remarkPlugins={[remarkGfm, remarkMath]} rehypePlugins={[rehypeKatex]} components={markdownComponents}>
-                  {notes || t(language, "writeHere")}
-                </ReactMarkdown>
-                </div>
+              <article key={`preview-${refreshTick}`}>
+                <MarkdownPreview
+                  content={notes}
+                  placeholder={t(language, "writeHere")}
+                  sourcePath={markdownAssetBase}
+                  language={language}
+                  onOpenPdfQuote={(path, page) => requestPdfOpen(path, { preserveState: true, targetPage: page })}
+                />
               </article>
             </div>
           </Panel>

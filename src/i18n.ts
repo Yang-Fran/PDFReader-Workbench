@@ -1,4 +1,4 @@
-export type UiLanguage = "zh" | "en";
+﻿export type UiLanguage = "zh" | "en";
 
 const messages = {
   zh: {
@@ -41,7 +41,7 @@ const messages = {
     thinking: "思考过程",
     addAttachment: "添加附件",
     includeProjectContext: "将当前 PDF 和 Markdown 加入对话",
-    dropFiles: "可拖入 .md/.txt/.json/.csv/.log/.pdf 及常见代码文本文件",
+    dropFiles: "可拖入 .md/.txt/.json/.csv/.log/.pdf、图片及常见代码文本文件",
     dropFilesActive: "松开鼠标以上传附件",
     askAgent: "向 Agent 提问，或输入 >>help",
     send: "发送",
@@ -49,8 +49,8 @@ const messages = {
     assistant: "助手",
     pdfPane: "PDF",
     openPdf: "打开 PDF",
-    singleMode: "单栏",
-    dualMode: "双栏",
+    singleMode: "原文",
+    dualMode: "对照",
     hideTextLayer: "隐藏文字层",
     showTextLayer: "显示文字层",
     hidePdfLayer: "隐藏 PDF 层",
@@ -157,7 +157,7 @@ const messages = {
     thinking: "Thinking",
     addAttachment: "Add attachment",
     includeProjectContext: "Include current PDF + Markdown in chat",
-    dropFiles: "Drop .md/.txt/.json/.csv/.log/.pdf and common text/code files here",
+    dropFiles: "Drop .md/.txt/.json/.csv/.log/.pdf, images, and common text/code files here",
     dropFilesActive: "Release to upload attachments",
     askAgent: "Ask the agent or enter >>help",
     send: "Send",
@@ -165,8 +165,8 @@ const messages = {
     assistant: "Assistant",
     pdfPane: "PDF",
     openPdf: "Open PDF",
-    singleMode: "Single",
-    dualMode: "Dual",
+    singleMode: "Original",
+    dualMode: "Compare",
     hideTextLayer: "Hide text layer",
     showTextLayer: "Show text layer",
     hidePdfLayer: "Hide PDF layer",

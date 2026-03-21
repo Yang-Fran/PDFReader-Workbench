@@ -45,7 +45,8 @@ const hasTranslationCacheContent = () => {
     (document) =>
       Object.keys(document.pageTextCache).length > 0 ||
       Object.keys(document.pageTranslationCache).length > 0 ||
-      Object.keys(document.pageTranslationStatus).length > 0
+      Object.keys(document.pageTranslationStatus).length > 0 ||
+      Object.keys(document.pageMetrics).length > 0
   );
 };
 
@@ -64,7 +65,8 @@ const buildTranslationCacheFiles = () => {
         !!document.pdfPath &&
         (Object.keys(document.pageTextCache).length > 0 ||
           Object.keys(document.pageTranslationCache).length > 0 ||
-          Object.keys(document.pageTranslationStatus).length > 0)
+          Object.keys(document.pageTranslationStatus).length > 0 ||
+          Object.keys(document.pageMetrics).length > 0)
     )
     .map((document) => ({
       name: buildPdfCacheFileName(document.pdfPath, document.pdfName),
@@ -76,7 +78,8 @@ const buildTranslationCacheFiles = () => {
           currentPage: document.currentPage,
           pageTextCache: document.pageTextCache,
           pageTranslationCache: document.pageTranslationCache,
-          pageTranslationStatus: document.pageTranslationStatus
+          pageTranslationStatus: document.pageTranslationStatus,
+          pageMetrics: document.pageMetrics
         },
         null,
         2

@@ -13,6 +13,7 @@ export interface ChatMessage {
 export interface AgentDialog {
   id: string;
   title: string;
+  titleEdited?: boolean;
   createdAt: number;
   updatedAt: number;
   messages: ChatMessage[];
@@ -65,6 +66,37 @@ export interface ApiQuotaInfo {
   resetTokens?: string;
 }
 
+export interface PdfExportMargins {
+  top: number;
+  right: number;
+  bottom: number;
+  left: number;
+}
+
+export type PdfExportSlotKind = "none" | "title" | "date" | "pageNumber" | "pageNumberTotal" | "custom";
+
+export interface PdfExportSlot {
+  kind: PdfExportSlotKind;
+  text: string;
+}
+
+export interface PdfExportHeaderFooter {
+  enabled: boolean;
+  left: PdfExportSlot;
+  center: PdfExportSlot;
+  right: PdfExportSlot;
+}
+
+export interface PdfExportSettings {
+  pageSize: "A4" | "Letter";
+  landscape: boolean;
+  scale: number;
+  sourcePath: string;
+  margins: PdfExportMargins;
+  header: PdfExportHeaderFooter;
+  footer: PdfExportHeaderFooter;
+}
+
 export interface AppSettings {
   baseUrl: string;
   apiKey: string;
@@ -76,14 +108,42 @@ export interface AppSettings {
   enableAgentAttachments: boolean;
   includeProjectContextInChat: boolean;
   hideCommandMessages: boolean;
+  enableAgentStreaming: boolean;
+  enableTranslationStreaming: boolean;
   chatSystemPrompt: string;
   translationPrompt: string;
   glossary: string;
+  pdfExport: PdfExportSettings;
+}
+
+export type TranslationExecutionMode = "stream" | "expli";
+
+export interface TranslationTaskState {
+  active: boolean;
+  phase: "preparing" | "translating";
+  completedPages: number;
+  totalPages: number;
+  mode: TranslationExecutionMode;
+  warning: string;
 }
 
 export type ViewerMode = "single" | "dual";
 
 export type TranslationStatus = "idle" | "queued" | "translating" | "done" | "error";
+
+export interface PdfViewState {
+  zoomScale: number;
+  textLayerVisible: boolean;
+  pdfLayerVisible: boolean;
+  scrollLinked: boolean;
+}
+
+export interface TranslationPageMetrics {
+  pdfWidth: number;
+  pdfHeight: number;
+  translationCardHeight: number;
+  translationContentHeight: number;
+}
 
 export interface TranslationDocumentCache {
   pdfPath: string;
@@ -92,6 +152,7 @@ export interface TranslationDocumentCache {
   pageTextCache: Record<number, string>;
   pageTranslationCache: Record<number, string>;
   pageTranslationStatus: Record<number, TranslationStatus>;
+  pageMetrics: Record<number, TranslationPageMetrics>;
 }
 
 export interface ProjectSnapshot {
@@ -102,6 +163,8 @@ export interface ProjectSnapshot {
   notesPath?: string;
   currentPage: number;
   viewerMode: ViewerMode;
+  pdfViewState?: PdfViewState;
+  pdfViewDocuments?: Record<string, PdfViewState>;
   notes: string;
   dialogs: AgentDialog[];
   activeDialogId: string;

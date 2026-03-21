@@ -1,6 +1,6 @@
 import { open, save } from "@tauri-apps/plugin-dialog";
 import { useAppStore } from "../stores/appStore";
-import { ChatMessage, ProjectSnapshot } from "../types";
+import { ChatMessage, ProjectSnapshot, TranslationPageMetrics } from "../types";
 import { nativeFileService } from "./nativeFileService";
 import { buildPdfCacheFileName, getProjectCacheFilePath, PROJECT_STATE_CACHE_FILE, workspaceService } from "./workspaceService";
 
@@ -17,13 +17,16 @@ type ProjectStateCache = {
   dialogIds: string[];
 };
 
-type TranslationCacheState = Pick<ProjectSnapshot, "pageTextCache" | "pageTranslationCache" | "pageTranslationStatus">;
+type TranslationCacheState = Pick<ProjectSnapshot, "pageTextCache" | "pageTranslationCache" | "pageTranslationStatus"> & {
+  pageMetrics?: Record<number, TranslationPageMetrics>;
+};
 
 const buildLegacyDialog = (messages: ChatMessage[]) => {
   const now = Date.now();
   return {
     id: `dialog-legacy-${now}`,
     title: "Imported dialog",
+    titleEdited: true,
     createdAt: now,
     updatedAt: now,
     messages
@@ -43,6 +46,8 @@ const buildSnapshot = (projectPath: string): ProjectSnapshot => {
     notesPath,
     currentPage: state.currentPage,
     viewerMode: state.viewerMode,
+    pdfViewState: state.pdfViewState,
+    pdfViewDocuments: state.pdfViewDocuments,
     notes: "",
     dialogs: [],
     activeDialogId: "",
@@ -56,7 +61,8 @@ const buildSnapshot = (projectPath: string): ProjectSnapshot => {
         (document) =>
           Object.keys(document.pageTextCache).length > 0 ||
           Object.keys(document.pageTranslationCache).length > 0 ||
-          Object.keys(document.pageTranslationStatus).length > 0
+          Object.keys(document.pageTranslationStatus).length > 0 ||
+          Object.keys(document.pageMetrics).length > 0
       )
       .map((document) => buildPdfCacheFileName(document.pdfPath, document.pdfName)),
     llmCacheIndex: state.dialogs.some((dialog) => dialog.messages.length > 0) || !!state.lastAIReply ? [PROJECT_STATE_CACHE_FILE, ...state.dialogs.filter((dialog) => dialog.messages.length > 0).map((dialog) => `dialog-${dialog.id}.json`)] : [],
@@ -102,7 +108,8 @@ const readTranslationCacheState = async (projectPath: string, snapshot: ProjectS
         currentPage: parsed.currentPage ?? 1,
         pageTextCache: parsed.pageTextCache ?? {},
         pageTranslationCache: parsed.pageTranslationCache ?? {},
-        pageTranslationStatus: parsed.pageTranslationStatus ?? {}
+        pageTranslationStatus: parsed.pageTranslationStatus ?? {},
+        pageMetrics: parsed.pageMetrics ?? {}
       };
     } catch {
       continue;
@@ -149,7 +156,7 @@ const readLlmState = async (projectPath: string, snapshot: ProjectSnapshot) => {
 
 export const projectService = {
   async newProject() {
-    useAppStore.getState().resetWorkspace();
+    useAppStore.getState().resetWorkspace({ seedBeginner: true });
     return true;
   },
 
