@@ -38,6 +38,9 @@
   --scrollbar-track: rgba(203, 213, 225, 0.68);
   --scrollbar-thumb: rgba(100, 116, 139, 0.55);
   --scrollbar-thumb-hover: rgba(71, 85, 105, 0.72);
+  --editor-selection-bg: rgba(14, 165, 233, 0.34);
+  --editor-selection-bg-inactive: rgba(14, 165, 233, 0.24);
+  --editor-selection-text: #111827;
 }
 
 :root[data-theme="dark"] {
@@ -74,6 +77,9 @@
   --scrollbar-track: rgba(30, 41, 59, 0.88);
   --scrollbar-thumb: rgba(100, 116, 139, 0.7);
   --scrollbar-thumb-hover: rgba(148, 163, 184, 0.86);
+  --editor-selection-bg: rgba(56, 189, 248, 0.34);
+  --editor-selection-bg-inactive: rgba(56, 189, 248, 0.24);
+  --editor-selection-text: #e0f2fe;
 }
 
 html,
@@ -152,10 +158,28 @@ body {
   box-shadow: 0 12px 24px color-mix(in srgb, var(--accent-color) 24%, transparent);
 }
 
+.app-rail-brand__mark svg {
+  width: 1.32rem;
+  height: 1.32rem;
+}
+
 .app-rail-actions {
   display: flex;
   flex-direction: column;
   gap: 0.55rem;
+}
+
+.app-rail-menu {
+  display: flex;
+  flex-direction: column;
+  gap: 0.45rem;
+}
+
+.app-rail-submenu {
+  display: flex;
+  flex-direction: column;
+  gap: 0.35rem;
+  padding: 0 0.15rem 0.15rem;
 }
 
 .app-rail-spacer {
@@ -195,6 +219,40 @@ body {
   line-height: 1.1;
   color: var(--text-muted);
   word-break: break-word;
+}
+
+.app-rail-subbutton {
+  display: flex;
+  align-items: center;
+  gap: 0.45rem;
+  border: 1px solid var(--border-color);
+  border-radius: 0.95rem;
+  padding: 0.55rem 0.65rem;
+  background: color-mix(in srgb, var(--panel-bg) 80%, transparent);
+  text-align: left;
+}
+
+.app-rail-subbutton__icon {
+  display: inline-flex;
+  width: 1.55rem;
+  height: 1.55rem;
+  align-items: center;
+  justify-content: center;
+  border-radius: 999px;
+  background: color-mix(in srgb, var(--card-bg) 84%, transparent);
+  color: var(--text-main);
+}
+
+.app-rail-subbutton__icon svg {
+  width: 0.9rem;
+  height: 0.9rem;
+}
+
+.app-rail-subbutton__label {
+  min-width: 0;
+  color: var(--text-main);
+  font-size: 0.7rem;
+  line-height: 1.15;
 }
 
 .app-rail-button--active {
@@ -898,10 +956,37 @@ body {
   border-color: var(--border-color) !important;
 }
 
+.notes-editor .cm-gutters {
+  flex: 0 0 auto;
+}
+
+.notes-editor .cm-lineNumbers {
+  min-width: 4.5ch;
+}
+
+.notes-editor .cm-foldGutter {
+  width: 1.5rem;
+  min-width: 1.5rem;
+}
+
 .notes-editor .cm-lineNumbers .cm-gutterElement,
 .notes-editor .cm-foldGutter .cm-gutterElement,
 .notes-editor .cm-foldPlaceholder {
   color: var(--text-muted) !important;
+}
+
+.notes-editor .cm-lineNumbers .cm-gutterElement {
+  min-width: 4.5ch;
+  padding: 0 0.5rem 0 0.75rem;
+}
+
+.notes-editor .cm-foldGutter .cm-gutterElement {
+  display: flex;
+  width: 1.5rem;
+  min-width: 1.5rem;
+  align-items: center;
+  justify-content: center;
+  padding: 0;
 }
 
 .notes-editor .cm-foldPlaceholder {
@@ -939,9 +1024,9 @@ body {
 
 .notes-editor .cm-content ::selection,
 .notes-editor .cm-line::selection,
-.notes-editor .cm-selectionBackground {
-  background: color-mix(in srgb, var(--accent-color) 78%, #1d4ed8) !important;
-  color: #ffffff !important;
+.notes-editor .cm-line *::selection {
+  background: transparent !important;
+  color: var(--editor-selection-text) !important;
 }
 
 .notes-editor .cm-editor .cm-cursor,
@@ -949,35 +1034,58 @@ body {
   border-left: 2px solid color-mix(in srgb, var(--accent-color) 40%, #ffffff) !important;
 }
 
-.notes-editor .cm-editor.cm-focused .cm-selectionBackground,
 .notes-editor .cm-editor .cm-selectionLayer .cm-selectionBackground {
-  background: color-mix(in srgb, var(--accent-color) 72%, #1d4ed8) !important;
+  opacity: 1 !important;
+  border-radius: 2px;
+}
+
+.notes-editor .cm-editor.cm-focused .cm-selectionLayer .cm-selectionBackground {
+  background: var(--editor-selection-bg) !important;
+}
+
+.notes-editor .cm-editor:not(.cm-focused) .cm-selectionLayer .cm-selectionBackground {
+  background: var(--editor-selection-bg-inactive) !important;
+}
+
+.notes-editor .cm-editor .cm-activeLine,
+.notes-editor .cm-editor .cm-activeLineGutter {
+  background: color-mix(in srgb, var(--accent-soft) 26%, transparent) !important;
 }
 
 .app-files-dock {
+  position: absolute;
+  top: 0;
+  bottom: 0;
+  left: 0;
+  z-index: 30;
+  width: 320px;
   overflow: hidden;
+  opacity: 0;
+  visibility: hidden;
+  pointer-events: none;
+  transform: translateX(-14px) scale(0.985);
+  transform-origin: left center;
   transition:
-    width 0.2s ease,
+    transform 0.18s ease,
     opacity 0.18s ease,
-    margin-right 0.18s ease;
+    visibility 0.18s ease;
 }
 
 .app-files-dock--open {
-  width: 300px;
-  margin-right: 0.25rem;
   opacity: 1;
   visibility: visible;
+  pointer-events: auto;
+  transform: translateX(0) scale(1);
 }
 
 .app-files-dock--closed {
-  width: 0;
-  margin-right: 0;
   opacity: 0;
   visibility: hidden;
   pointer-events: none;
 }
 
 .app-files-dock__inner {
-  width: 300px;
+  width: 320px;
   height: 100%;
+  filter: drop-shadow(0 16px 32px rgba(15, 23, 42, 0.18));
 }

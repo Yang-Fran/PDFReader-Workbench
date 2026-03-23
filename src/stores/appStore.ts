@@ -5,6 +5,8 @@ import {
   ApiQuotaInfo,
   AppSettings,
   ChatMessage,
+  NotesViewState,
+  PageScrollState,
   PdfExportSettings,
   PdfViewState,
   PdfQuote,
@@ -17,8 +19,7 @@ import {
   WorkspaceFileRef
 } from "../types";
 import { createBeginnerGuideMessages, getBeginnerDialogTitle } from "../services/beginnerGuide";
-
-const SETTINGS_KEY = "pdfreader_settings";
+import { arePersistedSettingsEqual, defaultSettings, mergePdfExportSettings, normalizeAppSettings, saveGlobalSettings } from "../services/appSettingsService";
 
 const createDialogId = () => `dialog-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
 
@@ -48,112 +49,6 @@ const createBeginnerDialog = (language: "zh" | "en"): AgentDialog => {
   };
 };
 
-const defaultSettings: AppSettings = {
-  baseUrl: "http://127.0.0.1:1234",
-  apiKey: "",
-  model: "qwen/qwen3.5-9b",
-  language: "zh",
-  accentColor: "#2563eb",
-  themeMode: "light",
-  showThinking: true,
-  enableAgentAttachments: true,
-  includeProjectContextInChat: true,
-  hideCommandMessages: false,
-  enableAgentStreaming: true,
-  enableTranslationStreaming: true,
-  chatSystemPrompt: "",
-  translationPrompt: "",
-  glossary: "",
-  pdfExport: {
-    pageSize: "A4",
-    landscape: false,
-    scale: 1,
-    sourcePath: "",
-    margins: {
-      top: 12,
-      right: 12,
-      bottom: 14,
-      left: 12
-    },
-    header: {
-      enabled: false,
-      left: { kind: "none", text: "" },
-      center: { kind: "title", text: "" },
-      right: { kind: "date", text: "" }
-    },
-    footer: {
-      enabled: true,
-      left: { kind: "none", text: "" },
-      center: { kind: "none", text: "" },
-      right: { kind: "pageNumberTotal", text: "" }
-    }
-  }
-};
-
-const mergePdfExportSettings = (value?: Partial<PdfExportSettings> | null): PdfExportSettings => {
-  const mergedHeader = {
-    ...defaultSettings.pdfExport.header,
-    ...(value?.header ?? {}),
-    left: {
-      ...defaultSettings.pdfExport.header.left,
-      ...(value?.header?.left ?? {})
-    },
-    center: {
-      ...defaultSettings.pdfExport.header.center,
-      ...(value?.header?.center ?? {})
-    },
-    right: {
-      ...defaultSettings.pdfExport.header.right,
-      ...(value?.header?.right ?? {})
-    }
-  };
-
-  const mergedFooter = {
-    ...defaultSettings.pdfExport.footer,
-    ...(value?.footer ?? {}),
-    left: {
-      ...defaultSettings.pdfExport.footer.left,
-      ...(value?.footer?.left ?? {})
-    },
-    center: {
-      ...defaultSettings.pdfExport.footer.center,
-      ...(value?.footer?.center ?? {})
-    },
-    right: {
-      ...defaultSettings.pdfExport.footer.right,
-      ...(value?.footer?.right ?? {})
-    }
-  };
-
-  return {
-    pageSize: value?.pageSize ?? defaultSettings.pdfExport.pageSize,
-    landscape: value?.landscape ?? defaultSettings.pdfExport.landscape,
-    scale: value?.scale ?? defaultSettings.pdfExport.scale,
-    sourcePath: value?.sourcePath ?? defaultSettings.pdfExport.sourcePath,
-    margins: {
-      ...defaultSettings.pdfExport.margins,
-      ...(value?.margins ?? {})
-    },
-    header: mergedHeader,
-    footer: mergedFooter
-  };
-};
-
-const loadSettings = (): AppSettings => {
-  const raw = localStorage.getItem(SETTINGS_KEY);
-  if (!raw) return defaultSettings;
-  try {
-    const parsed = JSON.parse(raw) as Partial<AppSettings>;
-    return {
-      ...defaultSettings,
-      ...parsed,
-      pdfExport: mergePdfExportSettings(parsed.pdfExport)
-    };
-  } catch {
-    return defaultSettings;
-  }
-};
-
 const inferDialogTitle = (messages: ChatMessage[], fallback: string) => {
   const userMessage = messages.find((item) => item.role === "user" && item.content.trim());
   if (!userMessage) return fallback;
@@ -176,14 +71,17 @@ const emptyTranslationDocument = (pdfPath = "", pdfName = ""): TranslationDocume
   pageTextCache: {},
   pageTranslationCache: {},
   pageTranslationStatus: {},
-  pageMetrics: {}
+  pageMetrics: {},
+  pageCarryover: {},
+  viewState: { page: 1, progress: 0 }
 });
 
 const defaultPdfViewState: PdfViewState = {
   zoomScale: 1.2,
   textLayerVisible: true,
   pdfLayerVisible: true,
-  scrollLinked: true
+  scrollLinked: true,
+  scrollPosition: { page: 1, progress: 0 }
 };
 
 const defaultTranslationTaskState: TranslationTaskState = {
@@ -195,10 +93,22 @@ const defaultTranslationTaskState: TranslationTaskState = {
   warning: ""
 };
 
+const defaultTranslationViewState: PageScrollState = {
+  page: 1,
+  progress: 0
+};
+
+const defaultNotesViewState: NotesViewState = {
+  editorScrollTop: 0,
+  previewScrollTop: 0,
+  selectionAnchor: 0
+};
+
 interface AppState {
   settings: AppSettings;
   notes: string;
   notesFilePath: string;
+  notesViewState: NotesViewState;
   dialogs: AgentDialog[];
   activeDialogId: string;
   attachments: AgentAttachment[];
@@ -212,6 +122,8 @@ interface AppState {
   pageTranslationCache: Record<number, string>;
   pageTranslationStatus: Record<number, TranslationStatus>;
   pageTranslationMetrics: Record<number, TranslationPageMetrics>;
+  pageTranslationCarryover: Record<number, string>;
+  translationViewState: PageScrollState;
   translationDocuments: Record<string, TranslationDocumentCache>;
   pdfViewDocuments: Record<string, PdfViewState>;
   translationQueue: number[];
@@ -227,7 +139,9 @@ interface AppState {
   apiQuotaInfo: ApiQuotaInfo | null;
   pdfOpenRequest: { path: string; preserveState: boolean; targetPage?: number; requestId: number } | null;
   setSettings: (patch: Partial<AppSettings>) => void;
+  replaceSettings: (value: AppSettings) => void;
   setNotes: (value: string) => void;
+  setNotesViewState: (patch: Partial<NotesViewState>) => void;
   appendToNotes: (value: string) => void;
   setNotesFilePath: (value: string) => void;
   setDialogs: (value: AgentDialog[]) => void;
@@ -254,11 +168,14 @@ interface AppState {
   setPageTranslationCache: (page: number, value: string) => void;
   setPageTranslationStatus: (page: number, value: TranslationStatus) => void;
   setPageTranslationMetrics: (page: number, value: Partial<TranslationPageMetrics>) => void;
+  setPageTranslationCarryover: (page: number, value: string) => void;
+  setTranslationViewState: (value: PageScrollState) => void;
   setTranslationQueue: (pages: number[]) => void;
   clearPageTextCache: () => void;
   clearPageTranslationCache: () => void;
   clearPageTranslationStatus: () => void;
   clearPageTranslationMetrics: () => void;
+  clearPageTranslationCarryover: () => void;
   restoreTranslationCacheForPdf: (pdfPath: string, pdfName?: string) => void;
   clearAllTranslationDocuments: () => void;
   setCurrentPage: (value: number) => void;
@@ -278,12 +195,49 @@ interface AppState {
   resetWorkspace: (options?: { seedBeginner?: boolean }) => void;
 }
 
+type ActiveTranslationDocumentState = Pick<
+  AppState,
+  | "pdfPath"
+  | "pdfName"
+  | "currentPage"
+  | "pageTextCache"
+  | "pageTranslationCache"
+  | "pageTranslationStatus"
+  | "pageTranslationMetrics"
+  | "pageTranslationCarryover"
+  | "translationViewState"
+  | "translationDocuments"
+>;
+
+const buildActiveTranslationDocument = (state: ActiveTranslationDocumentState, overrides?: Partial<TranslationDocumentCache>): TranslationDocumentCache => ({
+  ...(state.translationDocuments[state.pdfPath] ?? emptyTranslationDocument(state.pdfPath, state.pdfName)),
+  pdfPath: state.pdfPath,
+  pdfName: state.pdfName,
+  currentPage: state.currentPage,
+  pageTextCache: state.pageTextCache,
+  pageTranslationCache: state.pageTranslationCache,
+  pageTranslationStatus: state.pageTranslationStatus,
+  pageMetrics: state.pageTranslationMetrics,
+  pageCarryover: state.pageTranslationCarryover,
+  viewState: state.translationViewState,
+  ...(overrides ?? {})
+});
+
+const patchActiveTranslationDocuments = (state: ActiveTranslationDocumentState, overrides?: Partial<TranslationDocumentCache>) =>
+  state.pdfPath
+    ? {
+        ...state.translationDocuments,
+        [state.pdfPath]: buildActiveTranslationDocument(state, overrides)
+      }
+    : state.translationDocuments;
+
 const initialDialog = createEmptyDialog("Dialog 1");
 
 export const useAppStore = create<AppState>((set) => ({
-  settings: loadSettings(),
+  settings: defaultSettings,
   notes: "",
   notesFilePath: "",
+  notesViewState: defaultNotesViewState,
   dialogs: [initialDialog],
   activeDialogId: initialDialog.id,
   attachments: [],
@@ -297,6 +251,8 @@ export const useAppStore = create<AppState>((set) => ({
   pageTranslationCache: {},
   pageTranslationStatus: {},
   pageTranslationMetrics: {},
+  pageTranslationCarryover: {},
+  translationViewState: defaultTranslationViewState,
   translationDocuments: {},
   pdfViewDocuments: {},
   translationQueue: [],
@@ -318,11 +274,23 @@ export const useAppStore = create<AppState>((set) => ({
         ...patch,
         pdfExport: patch.pdfExport ? mergePdfExportSettings({ ...state.settings.pdfExport, ...patch.pdfExport }) : state.settings.pdfExport
       };
-      localStorage.setItem(SETTINGS_KEY, JSON.stringify(next));
-      return { settings: next, projectDirty: true };
+      if (!arePersistedSettingsEqual(state.settings, next)) {
+        void saveGlobalSettings(next).catch((error) => {
+          console.error("Failed to save global settings", error);
+        });
+      }
+      return { settings: next };
+    }),
+  replaceSettings: (value) =>
+    set({
+      settings: normalizeAppSettings(value)
     }),
   setNotes: (value) =>
     set(() => ({ notes: value, projectDirty: true })),
+  setNotesViewState: (patch) =>
+    set((state) => ({
+      notesViewState: { ...state.notesViewState, ...patch }
+    })),
   appendToNotes: (value) =>
     set((state) => {
       const next = state.notes ? `${state.notes}\n\n${value}` : value;
@@ -443,59 +411,37 @@ export const useAppStore = create<AppState>((set) => ({
   setPageTextCache: (page, value) =>
     set((state) => {
       const pageTextCache = { ...state.pageTextCache, [page]: value };
-      const translationDocuments = state.pdfPath
-        ? {
-            ...state.translationDocuments,
-            [state.pdfPath]: {
-              ...(state.translationDocuments[state.pdfPath] ?? emptyTranslationDocument(state.pdfPath, state.pdfName)),
-              pdfPath: state.pdfPath,
-              pdfName: state.pdfName,
-              currentPage: state.currentPage,
-              pageTextCache,
-              pageTranslationCache: state.pageTranslationCache,
-              pageTranslationStatus: state.pageTranslationStatus
-            }
-          }
-        : state.translationDocuments;
+      const translationDocuments = patchActiveTranslationDocuments(
+        {
+          ...state,
+          pageTextCache
+        },
+        { pageTextCache }
+      );
       return { pageTextCache, translationDocuments, projectDirty: true };
     }),
   setPageTranslationCache: (page, value) =>
     set((state) => {
       const pageTranslationCache = { ...state.pageTranslationCache, [page]: value };
-      const translationDocuments = state.pdfPath
-        ? {
-            ...state.translationDocuments,
-            [state.pdfPath]: {
-              ...(state.translationDocuments[state.pdfPath] ?? emptyTranslationDocument(state.pdfPath, state.pdfName)),
-              pdfPath: state.pdfPath,
-              pdfName: state.pdfName,
-              currentPage: state.currentPage,
-              pageTextCache: state.pageTextCache,
-              pageTranslationCache,
-              pageTranslationStatus: state.pageTranslationStatus
-            }
-          }
-        : state.translationDocuments;
+      const translationDocuments = patchActiveTranslationDocuments(
+        {
+          ...state,
+          pageTranslationCache
+        },
+        { pageTranslationCache }
+      );
       return { pageTranslationCache, translationDocuments, projectDirty: true };
     }),
   setPageTranslationStatus: (page, value) =>
     set((state) => {
       const pageTranslationStatus = { ...state.pageTranslationStatus, [page]: value };
-      const translationDocuments = state.pdfPath
-        ? {
-            ...state.translationDocuments,
-            [state.pdfPath]: {
-              ...(state.translationDocuments[state.pdfPath] ?? emptyTranslationDocument(state.pdfPath, state.pdfName)),
-              pdfPath: state.pdfPath,
-              pdfName: state.pdfName,
-              currentPage: state.currentPage,
-              pageTextCache: state.pageTextCache,
-              pageTranslationCache: state.pageTranslationCache,
-              pageTranslationStatus,
-              pageMetrics: state.pageTranslationMetrics
-            }
-          }
-        : state.translationDocuments;
+      const translationDocuments = patchActiveTranslationDocuments(
+        {
+          ...state,
+          pageTranslationStatus
+        },
+        { pageTranslationStatus }
+      );
       return { pageTranslationStatus, translationDocuments, projectDirty: true };
     }),
   setPageTranslationMetrics: (page, value) =>
@@ -513,100 +459,94 @@ export const useAppStore = create<AppState>((set) => ({
       }
 
       const pageTranslationMetrics = { ...state.pageTranslationMetrics, [page]: nextMetric };
-      const translationDocuments = state.pdfPath
-        ? {
-            ...state.translationDocuments,
-            [state.pdfPath]: {
-              ...(state.translationDocuments[state.pdfPath] ?? emptyTranslationDocument(state.pdfPath, state.pdfName)),
-              pdfPath: state.pdfPath,
-              pdfName: state.pdfName,
-              currentPage: state.currentPage,
-              pageTextCache: state.pageTextCache,
-              pageTranslationCache: state.pageTranslationCache,
-              pageTranslationStatus: state.pageTranslationStatus,
-              pageMetrics: pageTranslationMetrics
-            }
-          }
-        : state.translationDocuments;
+      const translationDocuments = patchActiveTranslationDocuments(
+        {
+          ...state,
+          pageTranslationMetrics
+        },
+        { pageMetrics: pageTranslationMetrics }
+      );
 
       return { pageTranslationMetrics, translationDocuments, projectDirty: true };
     }),
+  setPageTranslationCarryover: (page, value) =>
+    set((state) => {
+      const pageTranslationCarryover = { ...state.pageTranslationCarryover, [page]: value };
+      const translationDocuments = patchActiveTranslationDocuments(
+        {
+          ...state,
+          pageTranslationCarryover
+        },
+        { pageCarryover: pageTranslationCarryover }
+      );
+      return { pageTranslationCarryover, translationDocuments, projectDirty: true };
+    }),
+  setTranslationViewState: (value) =>
+    set((state) => ({
+      translationViewState: value,
+      translationDocuments: patchActiveTranslationDocuments(
+        {
+          ...state,
+          translationViewState: value
+        },
+        { viewState: value }
+      )
+    })),
   setTranslationQueue: (pages) => set({ translationQueue: pages }),
   clearPageTextCache: () =>
     set((state) => {
-      const translationDocuments = state.pdfPath
-        ? {
-            ...state.translationDocuments,
-            [state.pdfPath]: {
-              ...(state.translationDocuments[state.pdfPath] ?? emptyTranslationDocument(state.pdfPath, state.pdfName)),
-              pdfPath: state.pdfPath,
-              pdfName: state.pdfName,
-              currentPage: state.currentPage,
-              pageTextCache: {},
-              pageTranslationCache: state.pageTranslationCache,
-              pageTranslationStatus: state.pageTranslationStatus,
-              pageMetrics: state.pageTranslationMetrics
-            }
-          }
-        : state.translationDocuments;
+      const translationDocuments = patchActiveTranslationDocuments(
+        {
+          ...state,
+          pageTextCache: {}
+        },
+        { pageTextCache: {} }
+      );
       return { pageTextCache: {}, translationDocuments, projectDirty: true };
     }),
   clearPageTranslationCache: () =>
     set((state) => {
-      const translationDocuments = state.pdfPath
-        ? {
-            ...state.translationDocuments,
-            [state.pdfPath]: {
-              ...(state.translationDocuments[state.pdfPath] ?? emptyTranslationDocument(state.pdfPath, state.pdfName)),
-              pdfPath: state.pdfPath,
-              pdfName: state.pdfName,
-              currentPage: state.currentPage,
-              pageTextCache: state.pageTextCache,
-              pageTranslationCache: {},
-              pageTranslationStatus: state.pageTranslationStatus,
-              pageMetrics: state.pageTranslationMetrics
-            }
-          }
-        : state.translationDocuments;
+      const translationDocuments = patchActiveTranslationDocuments(
+        {
+          ...state,
+          pageTranslationCache: {}
+        },
+        { pageTranslationCache: {} }
+      );
       return { pageTranslationCache: {}, translationDocuments, projectDirty: true };
     }),
   clearPageTranslationStatus: () =>
     set((state) => {
-      const translationDocuments = state.pdfPath
-        ? {
-            ...state.translationDocuments,
-            [state.pdfPath]: {
-              ...(state.translationDocuments[state.pdfPath] ?? emptyTranslationDocument(state.pdfPath, state.pdfName)),
-              pdfPath: state.pdfPath,
-              pdfName: state.pdfName,
-              currentPage: state.currentPage,
-              pageTextCache: state.pageTextCache,
-              pageTranslationCache: state.pageTranslationCache,
-              pageTranslationStatus: {},
-              pageMetrics: state.pageTranslationMetrics
-            }
-          }
-        : state.translationDocuments;
+      const translationDocuments = patchActiveTranslationDocuments(
+        {
+          ...state,
+          pageTranslationStatus: {}
+        },
+        { pageTranslationStatus: {} }
+      );
       return { pageTranslationStatus: {}, translationDocuments, projectDirty: true };
     }),
   clearPageTranslationMetrics: () =>
     set((state) => {
-      const translationDocuments = state.pdfPath
-        ? {
-            ...state.translationDocuments,
-            [state.pdfPath]: {
-              ...(state.translationDocuments[state.pdfPath] ?? emptyTranslationDocument(state.pdfPath, state.pdfName)),
-              pdfPath: state.pdfPath,
-              pdfName: state.pdfName,
-              currentPage: state.currentPage,
-              pageTextCache: state.pageTextCache,
-              pageTranslationCache: state.pageTranslationCache,
-              pageTranslationStatus: state.pageTranslationStatus,
-              pageMetrics: {}
-            }
-          }
-        : state.translationDocuments;
+      const translationDocuments = patchActiveTranslationDocuments(
+        {
+          ...state,
+          pageTranslationMetrics: {}
+        },
+        { pageMetrics: {} }
+      );
       return { pageTranslationMetrics: {}, translationDocuments, projectDirty: true };
+    }),
+  clearPageTranslationCarryover: () =>
+    set((state) => {
+      const translationDocuments = patchActiveTranslationDocuments(
+        {
+          ...state,
+          pageTranslationCarryover: {}
+        },
+        { pageCarryover: {} }
+      );
+      return { pageTranslationCarryover: {}, translationDocuments, projectDirty: true };
     }),
   restoreTranslationCacheForPdf: (pdfPath, pdfName) =>
     set((state) => {
@@ -616,6 +556,8 @@ export const useAppStore = create<AppState>((set) => ({
         pageTranslationCache: documentCache.pageTranslationCache,
         pageTranslationStatus: documentCache.pageTranslationStatus,
         pageTranslationMetrics: documentCache.pageMetrics ?? {},
+        pageTranslationCarryover: documentCache.pageCarryover ?? {},
+        translationViewState: documentCache.viewState ?? { page: documentCache.currentPage || 1, progress: 0 },
         currentPageText: documentCache.pageTextCache[documentCache.currentPage] ?? "",
         currentPageTranslation: documentCache.pageTranslationCache[documentCache.currentPage] ?? "",
         translationDocuments: {
@@ -624,7 +566,9 @@ export const useAppStore = create<AppState>((set) => ({
             ...documentCache,
             pdfPath,
             pdfName: pdfName ?? documentCache.pdfName,
-            pageMetrics: documentCache.pageMetrics ?? {}
+            pageMetrics: documentCache.pageMetrics ?? {},
+            pageCarryover: documentCache.pageCarryover ?? {},
+            viewState: documentCache.viewState ?? { page: documentCache.currentPage || 1, progress: 0 }
           }
         },
         projectDirty: true
@@ -636,6 +580,8 @@ export const useAppStore = create<AppState>((set) => ({
       pageTranslationCache: {},
       pageTranslationStatus: {},
       pageTranslationMetrics: {},
+      pageTranslationCarryover: {},
+      translationViewState: defaultTranslationViewState,
       currentPageText: "",
       currentPageTranslation: "",
       translationDocuments: {},
@@ -643,21 +589,13 @@ export const useAppStore = create<AppState>((set) => ({
     }),
   setCurrentPage: (value) =>
     set((state) => {
-      const translationDocuments = state.pdfPath
-        ? {
-            ...state.translationDocuments,
-            [state.pdfPath]: {
-              ...(state.translationDocuments[state.pdfPath] ?? emptyTranslationDocument(state.pdfPath, state.pdfName)),
-              pdfPath: state.pdfPath,
-              pdfName: state.pdfName,
-              currentPage: value,
-              pageTextCache: state.pageTextCache,
-              pageTranslationCache: state.pageTranslationCache,
-              pageTranslationStatus: state.pageTranslationStatus,
-              pageMetrics: state.pageTranslationMetrics
-            }
-          }
-        : state.translationDocuments;
+      const translationDocuments = patchActiveTranslationDocuments(
+        {
+          ...state,
+          currentPage: value
+        },
+        { currentPage: value }
+      );
       return { currentPage: value, translationDocuments, projectDirty: true };
     }),
   setTotalPages: (value) => set({ totalPages: value }),
@@ -702,10 +640,25 @@ export const useAppStore = create<AppState>((set) => ({
       const fallbackDialog = createEmptyDialog("Dialog 1");
       const dialogs = (snapshot.dialogs.length > 0 ? snapshot.dialogs : [fallbackDialog]).map(normalizeDialogTitleState);
       const activeDialogId = dialogs.some((dialog) => dialog.id === snapshot.activeDialogId) ? snapshot.activeDialogId : dialogs[0].id;
+      const activeDocument =
+        snapshot.translationDocuments?.[snapshot.pdfPath] ??
+        (snapshot.pdfPath
+          ? {
+              pdfPath: snapshot.pdfPath,
+              pdfName: snapshot.pdfName,
+              currentPage: snapshot.currentPage,
+              pageTextCache: snapshot.pageTextCache,
+              pageTranslationCache: snapshot.pageTranslationCache,
+              pageTranslationStatus: snapshot.pageTranslationStatus,
+              pageMetrics: {},
+              pageCarryover: {},
+              viewState: { page: snapshot.currentPage, progress: 0 }
+            }
+          : null);
       return {
-        settings: { ...state.settings, baseUrl: snapshot.settings.baseUrl, model: snapshot.settings.model },
         notes,
         notesFilePath: snapshot.notesPath ?? "",
+        notesViewState: snapshot.notesViewState ?? defaultNotesViewState,
         dialogs,
         activeDialogId,
         attachments: [],
@@ -718,16 +671,16 @@ export const useAppStore = create<AppState>((set) => ({
         pageTextCache: snapshot.pageTextCache,
         pageTranslationCache: snapshot.pageTranslationCache,
         pageTranslationStatus: snapshot.pageTranslationStatus,
-        pageTranslationMetrics: snapshot.translationDocuments?.[snapshot.pdfPath]?.pageMetrics ?? {},
-        translationDocuments: snapshot.translationDocuments ?? (snapshot.pdfPath ? { [snapshot.pdfPath]: {
-          pdfPath: snapshot.pdfPath,
-          pdfName: snapshot.pdfName,
-          currentPage: snapshot.currentPage,
-          pageTextCache: snapshot.pageTextCache,
-          pageTranslationCache: snapshot.pageTranslationCache,
-          pageTranslationStatus: snapshot.pageTranslationStatus,
-          pageMetrics: {}
-        } } : {}),
+        pageTranslationMetrics: activeDocument?.pageMetrics ?? {},
+        pageTranslationCarryover: activeDocument?.pageCarryover ?? {},
+        translationViewState: activeDocument?.viewState ?? { page: snapshot.currentPage, progress: 0 },
+        translationDocuments:
+          snapshot.translationDocuments ??
+          (activeDocument && snapshot.pdfPath
+            ? {
+                [snapshot.pdfPath]: activeDocument
+              }
+            : {}),
         pdfViewDocuments: snapshot.pdfViewDocuments ?? (snapshot.pdfPath ? { [snapshot.pdfPath]: { ...defaultPdfViewState, ...(snapshot.pdfViewState ?? {}) } } : {}),
         translationQueue: [],
         currentPage: snapshot.currentPage,
@@ -753,6 +706,7 @@ export const useAppStore = create<AppState>((set) => ({
     set({
       notes: "",
       notesFilePath: "",
+      notesViewState: defaultNotesViewState,
       dialogs: [dialog],
       activeDialogId: dialog.id,
       attachments: [],
@@ -766,6 +720,8 @@ export const useAppStore = create<AppState>((set) => ({
       pageTranslationCache: {},
       pageTranslationStatus: {},
       pageTranslationMetrics: {},
+      pageTranslationCarryover: {},
+      translationViewState: defaultTranslationViewState,
       translationDocuments: {},
       pdfViewDocuments: {},
       translationQueue: [],

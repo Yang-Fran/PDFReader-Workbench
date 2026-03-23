@@ -253,6 +253,8 @@ export function PdfPane() {
   const translationForceRef = useRef<Record<number, boolean>>({});
   const translationRunningRef = useRef(false);
   const translationAbortRef = useRef<Record<number, AbortController>>({});
+  const handledOpenRequestIdRef = useRef<number | null>(null);
+  const pendingPdfRestoreRef = useRef<PagePosition | null>(null);
   const pendingModeRestoreRef = useRef<PagePosition | null>(null);
   const pendingZoomRestoreRef = useRef<PagePosition | null>(null);
   const pendingTranslationRestoreRef = useRef<PagePosition | null>(null);
@@ -272,6 +274,7 @@ export function PdfPane() {
   const [ocrTextByPage, setOcrTextByPage] = useState<Record<number, string>>({});
   const [ocrLayerByPage, setOcrLayerByPage] = useState<Record<number, TextLayerItem[]>>({});
   const [translationRefreshKey, setTranslationRefreshKey] = useState(0);
+  const [restoreGeneration, setRestoreGeneration] = useState(0);
   const {
     totalPages,
     viewerMode,
@@ -295,6 +298,7 @@ export function PdfPane() {
     setPageTranslationCache,
     setPageTranslationStatus,
     setPageTranslationMetrics,
+    setTranslationViewState,
     restoreTranslationCacheForPdf,
     setSelectedPdfText,
     setSelectedPdfQuote,
@@ -359,24 +363,39 @@ export function PdfPane() {
   const syncScrollPane = useCallback((target: "pdf" | "translation", position: PagePosition) => {
     const container = target === "pdf" ? pdfScrollRef.current : translationScrollRef.current;
     const refs = target === "pdf" ? pdfPageRefs : translationCardRefs;
-    if (!container) return;
+    if (!container) {
+      debugLogger.warn(`[PDF-RESTORE] sync target=${target} skipped reason=no-container page=${position.page} progress=${position.progress.toFixed(4)}`);
+      return false;
+    }
     const entry = getPositionedElements(container, refs).find((item) => item.page === position.page);
-    if (!entry) return;
+    if (!entry) {
+      debugLogger.warn(`[PDF-RESTORE] sync target=${target} skipped reason=no-entry page=${position.page} progress=${position.progress.toFixed(4)} scrollTop=${container.scrollTop.toFixed(1)} scrollHeight=${container.scrollHeight.toFixed(1)} clientHeight=${container.clientHeight.toFixed(1)}`);
+      return false;
+    }
 
     const anchorOffset = container.clientHeight * VIEWPORT_CENTER_RATIO;
     const top = Math.max(0, entry.top + entry.height * position.progress - anchorOffset);
+    const maxScrollTop = Math.max(0, container.scrollHeight - container.clientHeight);
+    const reachableTop = Math.min(top, maxScrollTop);
 
     ignoreScrollRef.current = target;
     if (target === "pdf") {
       pdfScrollPositionRef.current = position;
+      setPdfViewState({ scrollPosition: position });
     } else {
       translationScrollPositionRef.current = position;
+      setTranslationViewState(position);
     }
-    container.scrollTo({ top, behavior: "auto" });
+    container.scrollTo({ top: reachableTop, behavior: "auto" });
+    const success = Math.abs(container.scrollTop - top) <= 1 || top <= maxScrollTop + 1;
+    debugLogger.info(
+      `[PDF-RESTORE] sync target=${target} page=${position.page} progress=${position.progress.toFixed(4)} entryTop=${entry.top.toFixed(1)} entryHeight=${entry.height.toFixed(1)} requestedTop=${top.toFixed(1)} reachableTop=${reachableTop.toFixed(1)} actualTop=${container.scrollTop.toFixed(1)} maxTop=${maxScrollTop.toFixed(1)} success=${success}`
+    );
     requestAnimationFrame(() => {
       if (ignoreScrollRef.current === target) ignoreScrollRef.current = null;
     });
-  }, []);
+    return success;
+  }, [setPdfViewState, setTranslationViewState]);
 
   const updateZoomScale = useCallback(
     (next: number | ((current: number) => number)) => {
@@ -450,13 +469,14 @@ export function PdfPane() {
       translationScrollPositionRef.current = position;
       setPdfViewportPage(target);
       setCurrentPage(target);
+      setPdfViewState({ scrollPosition: position });
       syncScrollPane("pdf", position);
       if (viewerMode === "dual" && scrollLinked) {
         setTranslationViewportPage(target);
         syncScrollPane("translation", position);
       }
     },
-    [scrollLinked, setCurrentPage, syncScrollPane, totalPages, viewerMode]
+    [scrollLinked, setCurrentPage, setPdfViewState, syncScrollPane, totalPages, viewerMode]
   );
 
   const runOcr = useCallback(async () => {
@@ -592,7 +612,7 @@ export function PdfPane() {
               };
 
               try {
-                const translated = await llmService.translatePageBySettings(text, {
+                const result = await llmService.translatePageBySettings(text, {
                   signal: controller.signal,
                   onToken: (token) => {
                     streamedTranslation += token;
@@ -605,9 +625,9 @@ export function PdfPane() {
                 }
                 const state = useAppStore.getState();
                 if (controller.signal.aborted || state.pageTranslationStatus[page] !== "translating") continue;
-                state.setPageTranslationCache(page, translated);
+                state.setPageTranslationCache(page, result);
                 state.setPageTranslationStatus(page, "done");
-                if (state.currentPage === page) state.setCurrentPageTranslation(translated);
+                if (state.currentPage === page) state.setCurrentPageTranslation(result);
                 requestAnimationFrame(() => {
                   requestAnimationFrame(() => {
                     measureTranslationCard(page);
@@ -633,7 +653,7 @@ export function PdfPane() {
         })();
       }
     },
-    [measureTranslationCard, totalPages]
+    [measureTranslationCard]
   );
 
   const requestTranslation = useCallback(
@@ -697,6 +717,33 @@ export function PdfPane() {
   }, [pdfViewportPage, totalPages]);
 
   useEffect(() => {
+    if (!pendingPdfRestoreRef.current) return;
+    const position = pendingPdfRestoreRef.current;
+    let frame = 0;
+    let attempts = 0;
+    const maxAttempts = 24;
+    const restore = () => {
+      attempts += 1;
+      debugLogger.info(`[PDF-RESTORE] try target=pdf attempt=${attempts}/${maxAttempts} page=${position.page} progress=${position.progress.toFixed(4)}`);
+      const restored = syncScrollPane("pdf", position);
+      if (restored) {
+        debugLogger.info(`[PDF-RESTORE] done target=pdf attempt=${attempts} page=${position.page} progress=${position.progress.toFixed(4)}`);
+        pendingPdfRestoreRef.current = null;
+        return;
+      }
+      if (attempts < maxAttempts) {
+        frame = requestAnimationFrame(restore);
+      } else {
+        debugLogger.warn(`[PDF-RESTORE] giveup target=pdf page=${position.page} progress=${position.progress.toFixed(4)}`);
+      }
+    };
+    frame = requestAnimationFrame(restore);
+    return () => {
+      cancelAnimationFrame(frame);
+    };
+  }, [restoreGeneration, syncScrollPane, totalPages, viewerMode, zoomScale]);
+
+  useEffect(() => {
     if (!pendingModeRestoreRef.current) return;
     const position = pendingModeRestoreRef.current;
     const frame = requestAnimationFrame(() => {
@@ -733,19 +780,29 @@ export function PdfPane() {
   useEffect(() => {
     if (!pendingTranslationRestoreRef.current) return;
     const position = pendingTranslationRestoreRef.current;
-    let frame1 = 0;
-    let frame2 = 0;
-    frame1 = requestAnimationFrame(() => {
-      frame2 = requestAnimationFrame(() => {
-        syncScrollPane("translation", position);
+    let frame = 0;
+    let attempts = 0;
+    const maxAttempts = 24;
+    const restore = () => {
+      attempts += 1;
+      debugLogger.info(`[PDF-RESTORE] try target=translation attempt=${attempts}/${maxAttempts} page=${position.page} progress=${position.progress.toFixed(4)}`);
+      const restored = syncScrollPane("translation", position);
+      if (restored) {
+        debugLogger.info(`[PDF-RESTORE] done target=translation attempt=${attempts} page=${position.page} progress=${position.progress.toFixed(4)}`);
         pendingTranslationRestoreRef.current = null;
-      });
-    });
-    return () => {
-      cancelAnimationFrame(frame1);
-      cancelAnimationFrame(frame2);
+        return;
+      }
+      if (attempts < maxAttempts) {
+        frame = requestAnimationFrame(restore);
+      } else {
+        debugLogger.warn(`[PDF-RESTORE] giveup target=translation page=${position.page} progress=${position.progress.toFixed(4)}`);
+      }
     };
-  }, [syncScrollPane, translationRefreshKey, viewerMode]);
+    frame = requestAnimationFrame(restore);
+    return () => {
+      cancelAnimationFrame(frame);
+    };
+  }, [restoreGeneration, syncScrollPane, translationRefreshKey, viewerMode]);
 
   useEffect(() => {
     const keyDown = (e: KeyboardEvent) => {
@@ -798,26 +855,56 @@ export function PdfPane() {
     return () => window.removeEventListener("agent:ocr-request", onOcrRequest as EventListener);
   }, [goToPage, pdfViewportPage, runOcr, totalPages]);
 
+  useEffect(() => {
+    const onCollectProjectState = () => {
+      const pdfContainer = pdfScrollRef.current;
+      if (pdfContainer && hasPdf) {
+        const position = captureViewportPosition(pdfContainer, pdfPageRefs);
+        pdfScrollPositionRef.current = position;
+        useAppStore.getState().setPdfViewState({ scrollPosition: position });
+        debugLogger.info(`[PDF-RESTORE] capture target=pdf page=${position.page} progress=${position.progress.toFixed(4)} scrollTop=${pdfContainer.scrollTop.toFixed(1)} scrollHeight=${pdfContainer.scrollHeight.toFixed(1)} clientHeight=${pdfContainer.clientHeight.toFixed(1)}`);
+      }
+
+      const translationContainer = translationScrollRef.current;
+      if (translationContainer && viewerMode === "dual") {
+        const position = captureViewportPosition(translationContainer, translationCardRefs);
+        translationScrollPositionRef.current = position;
+        useAppStore.getState().setTranslationViewState(position);
+        debugLogger.info(`[PDF-RESTORE] capture target=translation page=${position.page} progress=${position.progress.toFixed(4)} scrollTop=${translationContainer.scrollTop.toFixed(1)} scrollHeight=${translationContainer.scrollHeight.toFixed(1)} clientHeight=${translationContainer.clientHeight.toFixed(1)}`);
+      }
+    };
+
+    window.addEventListener("app:collect-project-state", onCollectProjectState as EventListener);
+    return () => window.removeEventListener("app:collect-project-state", onCollectProjectState as EventListener);
+  }, [hasPdf, viewerMode]);
+
   const loadPdfFromPath = useCallback(
     async (path: string, options?: { preserveState?: boolean; targetPage?: number; forceReload?: boolean }) => {
       const sameDocument = !!pdfPath && path === pdfPath;
-      const preservedTranslationPosition = options?.preserveState && sameDocument ? translationScrollPositionRef.current : null;
+      const canReuseLivePosition = Boolean(options?.preserveState && sameDocument && pdfDocRef.current);
+      const preservedPdfPosition = canReuseLivePosition ? pdfScrollPositionRef.current : null;
+      const preservedTranslationPosition = canReuseLivePosition ? translationScrollPositionRef.current : null;
+      debugLogger.info(
+        `[PDF-RESTORE] load start path=${path} sameDocument=${sameDocument} preserveState=${Boolean(options?.preserveState)} canReuseLive=${canReuseLivePosition} targetPage=${options?.targetPage ?? 0} preservedPdf=${preservedPdfPosition ? `${preservedPdfPosition.page}/${preservedPdfPosition.progress.toFixed(4)}` : "none"} preservedTranslation=${preservedTranslationPosition ? `${preservedTranslationPosition.page}/${preservedTranslationPosition.progress.toFixed(4)}` : "none"}`
+      );
 
       if (!options?.forceReload && pdfDocRef.current && sameDocument) {
         const targetPage = clamp(options?.targetPage ?? pdfViewportPage, 1, totalPages || pdfViewportPage || 1);
-        pdfScrollPositionRef.current = { page: targetPage, progress: 0 };
+        const restoredPdfPosition = preservedPdfPosition ?? { page: targetPage, progress: 0 };
+        pdfScrollPositionRef.current = restoredPdfPosition;
         translationScrollPositionRef.current = preservedTranslationPosition ?? { page: targetPage, progress: 0 };
-        setPdfViewportPage(targetPage);
+        setTranslationViewState(translationScrollPositionRef.current);
+        setPdfViewportPage(restoredPdfPosition.page);
         setTranslationViewportPage(translationScrollPositionRef.current.page);
-        setCurrentPage(targetPage);
+        setCurrentPage(restoredPdfPosition.page);
+        setPdfViewState({ scrollPosition: restoredPdfPosition });
+        pendingPdfRestoreRef.current = restoredPdfPosition;
         pendingTranslationRestoreRef.current = preservedTranslationPosition;
-        refreshTranslationPanel(targetPage, translationScrollPositionRef.current.page);
-        requestAnimationFrame(() => {
-          syncScrollPane("pdf", { page: targetPage, progress: 0 });
-          if (viewerMode === "dual" && scrollLinked && !preservedTranslationPosition) {
-            syncScrollPane("translation", { page: targetPage, progress: 0 });
-          }
-        });
+        setRestoreGeneration((value) => value + 1);
+        debugLogger.info(
+          `[PDF-RESTORE] load reuse targetPdf=${restoredPdfPosition.page}/${restoredPdfPosition.progress.toFixed(4)} targetTranslation=${translationScrollPositionRef.current.page}/${translationScrollPositionRef.current.progress.toFixed(4)}`
+        );
+        refreshTranslationPanel(restoredPdfPosition.page, translationScrollPositionRef.current.page);
         return;
       }
 
@@ -856,20 +943,32 @@ export function PdfPane() {
         setPdfName(path.split(/[\\/]/).pop() ?? path);
         restoreTranslationCacheForPdf(path, path.split(/[\\/]/).pop() ?? path);
         setTotalPages(doc.numPages);
-        const targetPage = clamp(options?.targetPage ?? 1, 1, doc.numPages);
-        pdfScrollPositionRef.current = { page: targetPage, progress: 0 };
-        translationScrollPositionRef.current = preservedTranslationPosition ?? { page: targetPage, progress: 0 };
-        setPdfViewportPage(targetPage);
+        const defaultTargetPage = clamp(options?.targetPage ?? 1, 1, doc.numPages);
+        const restoredPdfPosition = preservedPdfPosition ?? pdfViewDocuments[path]?.scrollPosition ?? { page: defaultTargetPage, progress: 0 };
+        const targetPage = clamp(restoredPdfPosition.page, 1, doc.numPages);
+        const restoredTranslationPosition =
+          preservedTranslationPosition ?? (useAppStore.getState().translationViewState.page >= 1 ? useAppStore.getState().translationViewState : { page: targetPage, progress: 0 });
+        debugLogger.info(
+          `[PDF-RESTORE] load opened path=${path} docPages=${doc.numPages} snapshotPdf=${pdfViewDocuments[path]?.scrollPosition ? `${pdfViewDocuments[path]!.scrollPosition!.page}/${pdfViewDocuments[path]!.scrollPosition!.progress.toFixed(4)}` : "none"} storeTranslation=${useAppStore.getState().translationViewState.page}/${useAppStore.getState().translationViewState.progress.toFixed(4)} targetPdf=${targetPage}/${clamp(restoredPdfPosition.progress, 0, 1).toFixed(4)} targetTranslation=${restoredTranslationPosition.page}/${restoredTranslationPosition.progress.toFixed(4)}`
+        );
+        pdfScrollPositionRef.current = { page: targetPage, progress: clamp(restoredPdfPosition.progress, 0, 1) };
+        translationScrollPositionRef.current = restoredTranslationPosition;
+        setTranslationViewState(restoredTranslationPosition);
+        setPdfViewportPage(pdfScrollPositionRef.current.page);
         setTranslationViewportPage(translationScrollPositionRef.current.page);
-        setCurrentPage(targetPage);
-        pendingTranslationRestoreRef.current = preservedTranslationPosition;
-        refreshTranslationPanel(targetPage, translationScrollPositionRef.current.page);
+        setCurrentPage(pdfScrollPositionRef.current.page);
+        setPdfViewState({ scrollPosition: pdfScrollPositionRef.current });
+        pendingPdfRestoreRef.current = pdfScrollPositionRef.current;
+        pendingTranslationRestoreRef.current = restoredTranslationPosition;
+        setRestoreGeneration((value) => value + 1);
+        refreshTranslationPanel(pdfScrollPositionRef.current.page, translationScrollPositionRef.current.page);
         if (!options?.preserveState) {
           setPdfViewState(pdfViewDocuments[path] ?? {
             zoomScale: 1.2,
             textLayerVisible: true,
             pdfLayerVisible: true,
-            scrollLinked: true
+            scrollLinked: true,
+            scrollPosition: pdfScrollPositionRef.current
           });
         }
         debugLogger.info(`[PDF] opened file=${path} docPages=${doc.numPages} lazySizes=enabled`);
@@ -902,6 +1001,8 @@ export function PdfPane() {
 
   useEffect(() => {
     if (!pdfOpenRequest) return;
+    if (handledOpenRequestIdRef.current === pdfOpenRequest.requestId) return;
+    handledOpenRequestIdRef.current = pdfOpenRequest.requestId;
     void loadPdfFromPath(pdfOpenRequest.path, {
       preserveState: pdfOpenRequest.preserveState,
       targetPage: pdfOpenRequest.targetPage
@@ -975,6 +1076,7 @@ export function PdfPane() {
     pdfScrollPositionRef.current = position;
     setPdfViewportPage(position.page);
     setCurrentPage(position.page);
+    setPdfViewState({ scrollPosition: position });
     if (viewerMode === "dual" && scrollLinked) {
       setTranslationViewportPage(position.page);
       syncScrollPane("translation", position);
@@ -987,6 +1089,7 @@ export function PdfPane() {
     const position = captureViewportPosition(container, translationCardRefs);
     translationScrollPositionRef.current = position;
     setTranslationViewportPage(position.page);
+    setTranslationViewState(position);
     if (scrollLinked) {
       pdfScrollPositionRef.current = position;
       setPdfViewportPage(position.page);
@@ -1139,6 +1242,11 @@ export function PdfPane() {
             <PanelResizeHandle className="resize-handle-y" />
             <Panel defaultSize={46} minSize={20}>
               <div key={`translation-${pdfPath || "none"}-${translationRefreshKey}`} ref={translationScrollRef} className="h-full overflow-auto rounded border border-border bg-white p-3" onScroll={handleTranslationScroll}>
+                <div className="sticky top-0 z-20 mb-3 flex justify-center pointer-events-none">
+                  <div className="rounded-full border border-border bg-white/90 px-3 py-1 text-xs text-slate-600 shadow-sm">
+                    {t(language, "page")}: {totalPages ? `${translationViewportPage}/${totalPages}` : "-"}
+                  </div>
+                </div>
                 <div className="mb-3 flex items-center justify-between rounded border border-border bg-slate-50 px-3 py-2 text-xs text-slate-600">
                   <div>连续翻译列表，按页同步滚动</div>
                   <div>{translationBusy ? "队列处理中" : "队列空闲"}</div>

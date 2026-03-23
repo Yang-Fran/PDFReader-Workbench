@@ -46,7 +46,11 @@ const hasTranslationCacheContent = () => {
       Object.keys(document.pageTextCache).length > 0 ||
       Object.keys(document.pageTranslationCache).length > 0 ||
       Object.keys(document.pageTranslationStatus).length > 0 ||
-      Object.keys(document.pageMetrics).length > 0
+      Object.keys(document.pageMetrics).length > 0 ||
+      Object.keys(document.pageCarryover).length > 0 ||
+      document.currentPage !== 1 ||
+      document.viewState.page !== 1 ||
+      document.viewState.progress !== 0
   );
 };
 
@@ -66,7 +70,11 @@ const buildTranslationCacheFiles = () => {
         (Object.keys(document.pageTextCache).length > 0 ||
           Object.keys(document.pageTranslationCache).length > 0 ||
           Object.keys(document.pageTranslationStatus).length > 0 ||
-          Object.keys(document.pageMetrics).length > 0)
+          Object.keys(document.pageMetrics).length > 0 ||
+          Object.keys(document.pageCarryover).length > 0 ||
+          document.currentPage !== 1 ||
+          document.viewState.page !== 1 ||
+          document.viewState.progress !== 0)
     )
     .map((document) => ({
       name: buildPdfCacheFileName(document.pdfPath, document.pdfName),
@@ -79,7 +87,9 @@ const buildTranslationCacheFiles = () => {
           pageTextCache: document.pageTextCache,
           pageTranslationCache: document.pageTranslationCache,
           pageTranslationStatus: document.pageTranslationStatus,
-          pageMetrics: document.pageMetrics
+          pageMetrics: document.pageMetrics,
+          pageCarryover: document.pageCarryover,
+          viewState: document.viewState
         },
         null,
         2

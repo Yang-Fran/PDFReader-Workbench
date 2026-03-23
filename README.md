@@ -1,16 +1,17 @@
 # PDF Reader Workbench
 
-PDF Reader Workbench is a Windows desktop workspace for reading PDFs, running OCR, translating pages, writing Markdown notes, and working with an AI agent in one project.
+PDF Reader Workbench is a Windows desktop workspace for reading PDFs, running OCR, translating pages, writing Markdown notes, and working with an AI agent inside one project.
 
 ## What It Does
 
 - Open local PDF and Markdown files inside one workspace
 - Run OCR on pages without a usable text layer
-- Translate PDF pages through an OpenAI-compatible API
+- Translate PDF pages through an OpenAI-compatible chat API
 - Keep Markdown notes, PDF quotes, and AI replies together
-- Render Markdown with HTML blocks, math, custom links, images, and attachments
-- Export Markdown notes to PDF through the system WebView print pipeline
-- Save and reopen `.pdfwb` projects with external cache directories
+- Render Markdown with HTML blocks, math, images, links, and attachments
+- Export Markdown notes to PDF through the system WebView pipeline
+- Save and reopen `.pdfwb` projects with external cache folders
+- Share one global settings file across different projects on the same machine
 
 ## Current Stack
 
@@ -23,21 +24,31 @@ PDF Reader Workbench is a Windows desktop workspace for reading PDFs, running OC
 
 ## Markdown And PDF Export
 
-The current Markdown to PDF path is:
+The current Markdown path is:
 
 1. CodeMirror for editing
 2. A normalization layer for custom tags and asset resolution
-3. `markdown-it` for Markdown to HTML
-4. MathJax for formula layout
-5. A print transform plus print CSS for stable pagination
+3. React Markdown / `markdown-it`-based rendering helpers
+4. KaTeX for math rendering
+5. Paged.js-assisted print preparation plus print CSS
 6. Tauri native export through the system WebView
 
 Important notes:
 
-- The app no longer depends on bundled Chromium for PDF export
+- The app does not depend on bundled Chromium for PDF export
 - Windows export uses the installed WebView2 runtime
+- Export prefers WebView2 DevTools `Page.printToPDF` to generate tagged PDFs and built-in outline/bookmarks, then falls back to `PrintToPdf` when needed
 - Relative and absolute asset paths are normalized before preview and export
-- Markdown preview and PDF export share the same rendering pipeline
+- Markdown preview and PDF export share the same asset-resolution rules
+- Relative Markdown assets are resolved from the current notes file path, or from the project path when no notes file exists yet
+
+## Settings And Project Data
+
+- App-level settings are stored in the app config directory as `settings.json`
+- Projects store workspace state, notes path, cache indexes, and view state
+- Translation cache lives in `translation_cache/`
+- Agent cache lives in `llm_cache/`
+- This keeps the project file lightweight while allowing multiple projects to share one settings profile
 
 ## Quick Start
 
@@ -67,14 +78,6 @@ When a new project is created, the first dialog is seeded with the same guide sh
 - `>>quit`
 
 Commands are case-insensitive.
-
-## Project Layout
-
-- Project file: `.pdfwb`
-- Translation cache: `translation_cache/`
-- Agent cache: `llm_cache/`
-
-This keeps the project file lightweight while preserving notes, translation cache, agent dialogs, and workspace state.
 
 ## Development
 
@@ -109,8 +112,10 @@ cargo check
 - Store: `src/stores/appStore.ts`
 - Agent pane: `src/components/agent/AgentPane.tsx`
 - Notes pane: `src/components/notes/NotesPane.tsx`
+- Markdown preview: `src/components/markdown/MarkdownPreview.tsx`
 - Settings: `src/components/settings/SettingsPanel.tsx`
-- Markdown export service: `src/services/pdfExportService.ts`
+- App settings service: `src/services/appSettingsService.ts`
+- Markdown print/export service: `src/services/markdownPrintService.ts`
 - Beginner guide text: `src/services/beginnerGuide.ts`
 - Tauri backend: `src-tauri/src/lib.rs`
 - Windows native PDF export: `src-tauri/src/native_pdf_export_windows.rs`

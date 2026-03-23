@@ -46,7 +46,7 @@ interface ProxyStreamEvent {
 }
 
 const DEFAULT_TRANSLATION_PROMPT =
-  "You are an academic translator. Translate the input into polished Chinese. Preserve heading hierarchy and paragraph structure. Add an extra blank line around headings and between distinct paragraphs when it improves readability. Output only the final translation content. Do not include explanations, notes, headings, or reasoning.";
+  "Translate the input into clear, natural Chinese. Preserve headings, paragraphs, line breaks, and existing Markdown/HTML structure where possible. Output only the translation.";
 
 const resolveChatEndpoint = (rawBaseUrl: string) => {
   const base = rawBaseUrl.trim().replace(/\/+$/, "");
@@ -355,11 +355,14 @@ const buildChatPayload = (messages: ChatMessage[]) => {
 
 const buildTranslationPayload = (text: string) => {
   const { translationPrompt, glossary } = useAppStore.getState().settings;
-  return [
-    { role: "system", content: translationPrompt.trim() || DEFAULT_TRANSLATION_PROMPT },
-    ...(glossary.trim() ? [{ role: "system", content: `Use this glossary consistently:\n${glossary.trim()}` }] : []),
-    { role: "user", content: text || "No extractable text on this page." }
-  ];
+  const payload: LlmMessagePayload[] = [{ role: "system", content: translationPrompt.trim() || DEFAULT_TRANSLATION_PROMPT }];
+
+  if (glossary.trim()) {
+    payload.push({ role: "system", content: `Use this glossary consistently:\n${glossary.trim()}` });
+  }
+
+  payload.push({ role: "user", content: text || "No extractable text on this page." });
+  return payload;
 };
 
 export const llmService = {
@@ -380,12 +383,14 @@ export const llmService = {
   },
 
   async translatePageByMode(text: string, mode: TranslationExecutionMode, callbacks?: StreamCallbacks): Promise<string> {
-    if (mode === "stream") return postChatStream(buildTranslationPayload(text), callbacks, { extraPayload: { enable_thinking: false } });
-    return postChat(buildTranslationPayload(text), callbacks?.signal, { extraPayload: { enable_thinking: false } });
+    const payload = buildTranslationPayload(text);
+    return mode === "stream"
+      ? postChatStream(payload, callbacks, { extraPayload: { enable_thinking: false } })
+      : postChat(payload, callbacks?.signal, { extraPayload: { enable_thinking: false } });
   },
 
   async translatePageBySettings(text: string, callbacks?: StreamCallbacks): Promise<string> {
-    return this.translatePageByMode(text, useAppStore.getState().settings.enableTranslationStreaming ? "stream" : "expli", callbacks);
+    return llmService.translatePageByMode(text, useAppStore.getState().settings.enableTranslationStreaming ? "stream" : "expli", callbacks);
   },
 
   async translatePageStream(text: string, callbacks?: StreamCallbacks): Promise<string> {

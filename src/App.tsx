@@ -4,7 +4,9 @@ import { Panel, PanelGroup, PanelResizeHandle } from "react-resizable-panels";
 import { ToastViewport } from "./components/common/ToastViewport";
 import { FileSidebar } from "./components/files/FileSidebar";
 import { t } from "./i18n";
+import { loadGlobalSettings } from "./services/appSettingsService";
 import { projectService } from "./services/projectService";
+import { workspaceService } from "./services/workspaceService";
 import { useToastStore } from "./stores/toastStore";
 import { formatUiError, repairMojibake } from "./utils/textDisplay";
 import { useAppStore } from "./stores/appStore";
@@ -13,6 +15,7 @@ const PdfPane = lazy(() => import("./components/pdf/PdfPane").then((module) => (
 const NotesPane = lazy(() => import("./components/notes/NotesPane").then((module) => ({ default: module.NotesPane })));
 const AgentPane = lazy(() => import("./components/agent/AgentPane").then((module) => ({ default: module.AgentPane })));
 const SettingsPanel = lazy(() => import("./components/settings/SettingsPanel").then((module) => ({ default: module.SettingsPanel })));
+const APP_VERSION = "2.4.1";
 
 const getProjectLabel = (projectPath: string, language: "zh" | "en") => {
   if (!projectPath) return t(language, "noProject");
@@ -20,13 +23,28 @@ const getProjectLabel = (projectPath: string, language: "zh" | "en") => {
   return parts[parts.length - 1] || "workspace.pdfwb";
 };
 
-const SidebarToggleIcon = ({ open }: { open: boolean }) => (
+const BrandGlyphIcon = () => (
   <svg viewBox="0 0 20 20" fill="none" aria-hidden="true">
-    {open ? (
-      <path d="M12.8 5.6L7.8 10L12.8 14.4V5.6Z" fill="currentColor" />
-    ) : (
-      <path d="M7.2 5.6L12.2 10L7.2 14.4V5.6Z" fill="currentColor" />
-    )}
+    <path d="M6.1 15.3V4.7H10.2C12.75 4.7 14.5 6.28 14.5 8.75C14.5 11.27 12.75 12.85 10.2 12.85H6.1" stroke="currentColor" strokeWidth="2.05" strokeLinecap="round" strokeLinejoin="round" />
+  </svg>
+);
+
+const FileTreeIcon = () => (
+  <svg viewBox="0 0 20 20" fill="none" aria-hidden="true">
+    <path d="M3.75 5.25H8.15L9.55 6.8H16.25V14.75H3.75V5.25Z" stroke="currentColor" strokeWidth="1.25" strokeLinejoin="round" />
+    <path d="M6.2 8.4V11.9" stroke="currentColor" strokeWidth="1.2" strokeLinecap="round" />
+    <path d="M6.2 10.15H9.7" stroke="currentColor" strokeWidth="1.2" strokeLinecap="round" />
+    <path d="M9.7 10.15V12.6H13.75" stroke="currentColor" strokeWidth="1.2" strokeLinecap="round" strokeLinejoin="round" />
+    <circle cx="13.75" cy="12.6" r="1.1" fill="currentColor" />
+  </svg>
+);
+
+const ProjectMenuIcon = () => (
+  <svg viewBox="0 0 20 20" fill="none" aria-hidden="true">
+    <path d="M4.5 5.5H8.6L9.9 6.95H15.5V14.9H4.5V5.5Z" stroke="currentColor" strokeWidth="1.25" strokeLinejoin="round" />
+    <path d="M7.1 9.35H12.9" stroke="currentColor" strokeWidth="1.25" strokeLinecap="round" />
+    <path d="M10 7.1V11.6" stroke="currentColor" strokeWidth="1.25" strokeLinecap="round" />
+    <path d="M13.7 5.35L15.55 7.2" stroke="currentColor" strokeWidth="1.15" strokeLinecap="round" />
   </svg>
 );
 
@@ -102,9 +120,27 @@ const RailButton = ({
   </button>
 );
 
+const RailSubButton = ({
+  icon,
+  label,
+  disabled = false,
+  onClick
+}: {
+  icon: ReactNode;
+  label: string;
+  disabled?: boolean;
+  onClick: () => void;
+}) => (
+  <button type="button" className="app-rail-subbutton" title={label} aria-label={label} disabled={disabled} onClick={onClick}>
+    <span className="app-rail-subbutton__icon">{icon}</span>
+    <span className="app-rail-subbutton__label">{label}</span>
+  </button>
+);
+
 function App() {
   const [busy, setBusy] = useState(false);
   const [showFiles, setShowFiles] = useState(true);
+  const [showProjectMenu, setShowProjectMenu] = useState(false);
   const projectPath = useAppStore((s) => s.projectPath);
   const projectDirty = useAppStore((s) => s.projectDirty);
   const accentColor = useAppStore((s) => s.settings.accentColor);
@@ -141,6 +177,10 @@ function App() {
     let disposed = false;
     void (async () => {
       try {
+        const loadedSettings = await loadGlobalSettings();
+        if (disposed) return;
+        useAppStore.getState().replaceSettings(loadedSettings);
+
         const startupProjectPath = await invoke<string | null>("get_startup_project_path");
         if (disposed) return;
         if (!startupProjectPath) {
@@ -150,11 +190,11 @@ function App() {
         setBusy(true);
         await projectService.openProjectAtPath(startupProjectPath);
         if (disposed) return;
-        pushToast(repairMojibake(t(language, "loadOk")), "success");
+        pushToast(repairMojibake(t(useAppStore.getState().settings.language, "loadOk")), "success");
       } catch (error) {
         if (disposed) return;
         seedBeginnerWorkspaceIfPristine();
-        pushToast(formatUiError(error, language), "error");
+        pushToast(formatUiError(error, useAppStore.getState().settings.language), "error");
       } finally {
         if (!disposed) setBusy(false);
       }
@@ -178,6 +218,25 @@ function App() {
     }
   };
 
+  const runProjectActionAndClose = async (action: () => Promise<boolean>) => {
+    setShowProjectMenu(false);
+    await runProjectAction(action);
+  };
+
+  const refreshAllWorkspace = async () => {
+    try {
+      if (projectPath) {
+        await workspaceService.syncProjectCaches(projectPath);
+      }
+
+      for (const target of ["pdf", "md", "agent", "cache"] as const) {
+        window.dispatchEvent(new CustomEvent("agent:refresh", { detail: { target } }));
+      }
+    } catch (error) {
+      pushToast(formatUiError(error, language), "error");
+    }
+  };
+
   const toggleFiles = () => setShowFiles((value) => !value);
 
   useEffect(() => {
@@ -187,6 +246,10 @@ function App() {
         event.preventDefault();
         if (!busy) void runProjectAction(() => projectService.saveProject(event.shiftKey));
       }
+      if (isModifier && event.key.toLowerCase() === "p") {
+        event.preventDefault();
+        return;
+      }
       if (isModifier && event.key.toLowerCase() === "o") {
         event.preventDefault();
         if (!busy) void runProjectAction(() => projectService.openProject());
@@ -194,6 +257,15 @@ function App() {
       if (isModifier && event.key.toLowerCase() === "n") {
         event.preventDefault();
         if (!busy) void runProjectAction(() => projectService.newProject());
+      }
+      if (isModifier && event.key.toLowerCase() === "r") {
+        event.preventDefault();
+        if (!busy) void refreshAllWorkspace();
+        return;
+      }
+      if (event.key === "Escape") {
+        setShowProjectMenu(false);
+        setShowFiles(false);
       }
     };
     const onShowFiles = () => setShowFiles(true);
@@ -211,30 +283,45 @@ function App() {
       window.removeEventListener("agent:show-files", onShowFiles as EventListener);
       window.removeEventListener("agent:add-workspace-files", onAddWorkspaceFiles as EventListener);
     };
-  }, [busy]);
+  }, [busy, language, projectPath, pushToast]);
 
   return (
     <main className="app-shell flex h-screen gap-2 overflow-hidden p-2">
       <aside className="app-rail app-surface flex w-[92px] shrink-0 flex-col rounded border border-border p-2">
         <div className="app-rail-brand mb-2">
-          <span className="app-rail-brand__mark">P</span>
+          <span className="app-rail-brand__mark">
+            <BrandGlyphIcon />
+          </span>
         </div>
         <div className="app-rail-actions">
-          <RailButton icon={<SidebarToggleIcon open={showFiles} />} label={t(language, "files")} active={showFiles} onClick={toggleFiles} />
-          <RailButton icon={<NewProjectIcon />} label={t(language, "newProject")} disabled={busy} onClick={() => void runProjectAction(() => projectService.newProject())} />
-          <RailButton icon={<OpenProjectIcon />} label={t(language, "openProject")} disabled={busy} onClick={() => void runProjectAction(() => projectService.openProject())} />
-          <RailButton icon={<SaveProjectIcon />} label={t(language, "saveProject")} disabled={busy} onClick={() => void runProjectAction(() => projectService.saveProject(false))} />
-          <RailButton icon={<ExportPdfIcon />} label={language === "en" ? "Export PDF" : "导出 PDF"} onClick={() => window.dispatchEvent(new CustomEvent("app:export-pdf"))} />
+          <RailButton icon={<FileTreeIcon />} label={t(language, "files")} active={showFiles} onClick={toggleFiles} />
+          <div className="app-rail-menu">
+            <RailButton
+              icon={<ProjectMenuIcon />}
+              label={language === "en" ? "Project" : "项目"}
+              active={showProjectMenu}
+              disabled={busy}
+              onClick={() => setShowProjectMenu((value) => !value)}
+            />
+            {showProjectMenu && (
+              <div className="app-rail-submenu">
+                <RailSubButton icon={<NewProjectIcon />} label={t(language, "newProject")} disabled={busy} onClick={() => void runProjectActionAndClose(() => projectService.newProject())} />
+                <RailSubButton icon={<OpenProjectIcon />} label={t(language, "openProject")} disabled={busy} onClick={() => void runProjectActionAndClose(() => projectService.openProject())} />
+                <RailSubButton icon={<SaveProjectIcon />} label={t(language, "saveProject")} disabled={busy} onClick={() => void runProjectActionAndClose(() => projectService.saveProject(false))} />
+              </div>
+            )}
+          </div>
+          <RailButton icon={<ExportPdfIcon />} label={t(language, "notesExportPdf")} onClick={() => window.dispatchEvent(new CustomEvent("app:export-pdf"))} />
         </div>
         <div className="app-rail-spacer" />
         <RailButton icon={<SettingsIcon />} label={t(language, "settings")} onClick={() => window.dispatchEvent(new CustomEvent("app:open-settings"))} />
-        <div className="app-rail-project mt-3" title={`${projectLabel}${projectDirty ? ` • ${t(language, "unsaved")}` : ""}`}>
+        <div className="app-rail-project mt-3" title={`${projectLabel}${projectDirty ? ` - ${t(language, "unsaved")}` : ""}`}>
           <div className="app-rail-project__name">{projectLabel}</div>
-          <div className="app-rail-project__meta">{projectDirty ? t(language, "unsaved") : "2.4.0"}</div>
+          <div className="app-rail-project__meta">{projectDirty ? t(language, "unsaved") : APP_VERSION}</div>
         </div>
       </aside>
       <div className="app-surface min-h-0 min-w-0 flex-1 rounded border border-border p-1">
-        <div className="flex h-full">
+        <div className="relative h-full">
           <div className={`app-files-dock shrink-0 ${showFiles ? "app-files-dock--open" : "app-files-dock--closed"}`} aria-hidden={!showFiles}>
             <div className="app-files-dock__inner">
               <FileSidebar />
@@ -276,3 +363,4 @@ function App() {
 }
 
 export default App;
+

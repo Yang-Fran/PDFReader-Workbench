@@ -13,7 +13,7 @@ import { ocrService } from "../../services/ocrService";
 import { nativeFileService } from "../../services/nativeFileService";
 import { RichMarkdown } from "../markdown/RichMarkdown";
 import { useAppStore } from "../../stores/appStore";
-import { ChatMessage } from "../../types";
+import { AgentDialog, ChatMessage } from "../../types";
 import { t } from "../../i18n";
 
 type ReplayableAction = {
@@ -157,6 +157,25 @@ const canRegenerateMessage = (messages: ChatMessage[], messageId: string) => {
   return previous?.role === "user" && (previous.source ?? "chat") === "chat";
 };
 
+const buildDialogSearchText = (dialog: AgentDialog) =>
+  [dialog.title, ...dialog.messages.filter((message) => (message.source ?? "chat") === "chat").slice(-6).map((message) => message.content)]
+    .join("\n")
+    .toLowerCase();
+
+const buildDialogSnippet = (dialog: AgentDialog) => {
+  const latestUser = [...dialog.messages].reverse().find((message) => message.role === "user" && (message.source ?? "chat") === "chat");
+  const latestMessage = [...dialog.messages].reverse().find((message) => (message.source ?? "chat") !== "command");
+  return (latestUser?.content || latestMessage?.content || "").replace(/\s+/g, " ").trim();
+};
+
+const formatDialogTimestamp = (value: number, language: "zh" | "en") =>
+  new Intl.DateTimeFormat(language === "en" ? "en-US" : "zh-CN", {
+    month: "2-digit",
+    day: "2-digit",
+    hour: "2-digit",
+    minute: "2-digit"
+  }).format(new Date(value));
+
 const loadImageElement = async (blob: Blob) => {
   const url = URL.createObjectURL(blob);
   try {
@@ -180,6 +199,7 @@ export function AgentPane() {
   const [contextMenu, setContextMenu] = useState<{ id: string; x: number; y: number } | null>(null);
   const [renameDialogState, setRenameDialogState] = useState<{ id: string; value: string } | null>(null);
   const [editMessageState, setEditMessageState] = useState<{ id: string; value: string } | null>(null);
+  const [dialogQuery, setDialogQuery] = useState("");
   const dialogs = useAppStore((s) => s.dialogs);
   const activeDialogId = useAppStore((s) => s.activeDialogId);
   const attachments = useAppStore((s) => s.attachments);
@@ -218,6 +238,12 @@ export function AgentPane() {
   const activeDialog = dialogs.find((dialog) => dialog.id === activeDialogId) ?? dialogs[0];
   const sorted = useMemo(() => [...(activeDialog?.messages ?? [])].sort((a, b) => a.createdAt - b.createdAt), [activeDialog]);
   const pairedMessages = useMemo(() => pairCommandMessages(sorted), [sorted]);
+  const filteredDialogs = useMemo(() => {
+    const query = dialogQuery.trim().toLowerCase();
+    const ordered = [...dialogs].sort((left, right) => right.updatedAt - left.updatedAt);
+    if (!query) return ordered;
+    return ordered.filter((dialog) => buildDialogSearchText(dialog).includes(query));
+  }, [dialogQuery, dialogs]);
   const visibleItems = useMemo(
     () => (hideCommandMessages ? pairedMessages.filter((item) => item.kind !== "command") : pairedMessages),
     [hideCommandMessages, pairedMessages]
@@ -887,25 +913,48 @@ export function AgentPane() {
         </div>
       </header>
 
-      <div className="min-w-0 flex gap-2 overflow-x-auto border-b border-border px-2 py-2">
-        {dialogs.map((dialog) => (
-          <button
-            key={dialog.id}
-            type="button"
-            className={`min-w-[120px] rounded-xl border px-3 py-1 text-left text-xs ${dialog.id === activeDialogId ? "theme-active" : ""}`}
-            onClick={() => setActiveDialog(dialog.id)}
-            onContextMenu={(event) => {
-              event.preventDefault();
-              const next = clampMenuPosition(event.clientX, event.clientY);
-              setContextMenu({ id: dialog.id, x: next.x, y: next.y });
-            }}
-          >
-            <div className="truncate font-medium">{dialog.title}</div>
-            <div className="truncate text-slate-500">
-              {dialog.messages.length} {t(language, "msgs")}
+      <div className="border-b border-border px-2 py-2">
+        <input
+          className="mb-2 w-full rounded-xl border border-border px-3 py-2 text-xs"
+          placeholder={language === "en" ? "Search dialogs" : "搜索对话"}
+          value={dialogQuery}
+          onChange={(event) => setDialogQuery(event.target.value)}
+        />
+        <div className="max-h-40 space-y-2 overflow-y-auto">
+          {filteredDialogs.length === 0 ? (
+            <div className="rounded-xl border border-dashed border-border px-3 py-3 text-xs text-slate-500">
+              {language === "en" ? "No dialogs match this filter." : "没有匹配的对话。"}
             </div>
-          </button>
-        ))}
+          ) : (
+            filteredDialogs.map((dialog) => {
+              const snippet = buildDialogSnippet(dialog);
+              return (
+                <button
+                  key={dialog.id}
+                  type="button"
+                  className={`app-card w-full rounded-2xl border px-3 py-2 text-left text-xs ${dialog.id === activeDialogId ? "theme-active" : ""}`}
+                  onClick={() => setActiveDialog(dialog.id)}
+                  onContextMenu={(event) => {
+                    event.preventDefault();
+                    const next = clampMenuPosition(event.clientX, event.clientY);
+                    setContextMenu({ id: dialog.id, x: next.x, y: next.y });
+                  }}
+                >
+                  <div className="flex items-start justify-between gap-2">
+                    <div className="min-w-0 truncate font-medium">{dialog.title}</div>
+                    <div className="shrink-0 text-[11px] text-slate-500">{formatDialogTimestamp(dialog.updatedAt, language)}</div>
+                  </div>
+                  <div className="mt-1 flex items-center justify-between gap-2 text-[11px] text-slate-500">
+                    <span className="truncate">{snippet || (language === "en" ? "Empty dialog" : "空对话")}</span>
+                    <span className="shrink-0">
+                      {dialog.messages.length} {t(language, "msgs")}
+                    </span>
+                  </div>
+                </button>
+              );
+            })
+          )}
+        </div>
       </div>
 
       <div ref={messageListRef} className="min-h-0 min-w-0 flex-1 space-y-2 overflow-auto p-2">

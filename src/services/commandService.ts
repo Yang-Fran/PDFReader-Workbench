@@ -270,7 +270,7 @@ const commandRegistry: CommandSpec[] = [
 
           try {
             let streamedTranslation = "";
-            const translated = await llmService.translatePageByMode(textValue, mode, {
+            const result = await llmService.translatePageByMode(textValue, mode, {
               onToken: (token) => {
                 streamedTranslation += token;
                 const snapshot = useAppStore.getState();
@@ -280,9 +280,9 @@ const commandRegistry: CommandSpec[] = [
             });
 
             const snapshot = useAppStore.getState();
-            snapshot.setPageTranslationCache(page, translated);
+            snapshot.setPageTranslationCache(page, result);
             snapshot.setPageTranslationStatus(page, "done");
-            if (snapshot.currentPage === page) snapshot.setCurrentPageTranslation(translated);
+            if (snapshot.currentPage === page) snapshot.setCurrentPageTranslation(result);
             translatedPages.push(page);
           } catch (error) {
             useAppStore.getState().setPageTranslationStatus(page, "error");

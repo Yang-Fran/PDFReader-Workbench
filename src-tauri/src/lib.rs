@@ -8,7 +8,7 @@ use std::{
     process::Command,
     time::{SystemTime, UNIX_EPOCH},
 };
-use tauri::Emitter;
+use tauri::{Emitter, Manager};
 
 #[cfg(target_os = "windows")]
 mod native_pdf_export_windows;
@@ -106,6 +106,14 @@ fn write_text_file_any(path: String, content: String) -> Result<(), String> {
     fs::write(path, content).map_err(|e| format!("write text file error: {e}"))
 }
 
+#[tauri::command]
+fn write_binary_file_any(path: String, bytes: Vec<u8>) -> Result<(), String> {
+    if let Some(parent) = Path::new(&path).parent() {
+        fs::create_dir_all(parent).map_err(|e| format!("create parent dir error: {e}"))?;
+    }
+    fs::write(path, bytes).map_err(|e| format!("write binary file error: {e}"))
+}
+
 fn export_debug_log_path() -> PathBuf {
     env::temp_dir().join("pdfreader-export-debug.log")
 }
@@ -183,6 +191,8 @@ struct PdfExportOptions {
     page_size: String,
     landscape: bool,
     scale: f64,
+    #[serde(default)]
+    generate_outline: bool,
     margins: PdfExportMargins,
     native_header_footer: Option<PdfExportNativeHeaderFooter>,
 }
@@ -207,9 +217,10 @@ fn check_pdf_export_environment(
     options: PdfExportOptions,
 ) -> Result<PdfExportEnvironmentCheckResult, String> {
     append_export_debug_log(&format!(
-        "Environment check start page_size={} landscape={} native_header_footer={} output_mode=native-webview",
+        "Environment check start page_size={} landscape={} generate_outline={} native_header_footer={} output_mode=native-webview",
         options.page_size,
         options.landscape,
+        options.generate_outline,
         options
             .native_header_footer
             .as_ref()
@@ -240,10 +251,11 @@ async fn export_markdown_pdf(
     options: PdfExportOptions,
 ) -> Result<(), String> {
     append_export_debug_log(&format!(
-        "Export start page_size={} landscape={} scale={} native_header_footer={} backend=native-webview output={}",
+        "Export start page_size={} landscape={} scale={} generate_outline={} native_header_footer={} backend=native-webview output={}",
         options.page_size,
         options.landscape,
         options.scale,
+        options.generate_outline,
         options
             .native_header_footer
             .as_ref()
@@ -331,6 +343,16 @@ fn get_startup_project_path() -> Option<String> {
     std::env::args()
         .skip(1)
         .find(|arg| arg.to_ascii_lowercase().ends_with(".pdfwb") && Path::new(arg).is_file())
+}
+
+#[tauri::command]
+fn get_app_settings_path(app: tauri::AppHandle) -> Result<String, String> {
+    let dir = app
+        .path()
+        .app_config_dir()
+        .map_err(|e| format!("resolve app config dir error: {e}"))?;
+    fs::create_dir_all(&dir).map_err(|e| format!("create app config dir error: {e}"))?;
+    Ok(dir.join("settings.json").to_string_lossy().to_string())
 }
 
 #[tauri::command]
@@ -829,9 +851,11 @@ pub fn run() {
             read_binary_file,
             read_text_file_any,
             write_text_file_any,
+            write_binary_file_any,
             check_pdf_export_environment,
             export_markdown_pdf,
             get_startup_project_path,
+            get_app_settings_path,
             open_external_url,
             open_path,
             sync_project_cache,

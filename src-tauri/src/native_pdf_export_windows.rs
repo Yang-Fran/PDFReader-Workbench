@@ -1,5 +1,6 @@
 use crate::{ExportDebugStatus, NativePdfExportFailure, NativePdfExportResult, PdfExportOptions};
 use serde::de::DeserializeOwned;
+use serde::Deserialize;
 use std::{
     env, fs,
     io::Write,
@@ -10,7 +11,8 @@ use std::{
 };
 use tauri::{Url, WebviewUrl, WebviewWindow, WebviewWindowBuilder, Wry};
 use webview2_com::{
-    CoTaskMemPWSTR, ExecuteScriptCompletedHandler, PrintToPdfCompletedHandler,
+    CallDevToolsProtocolMethodCompletedHandler, CoTaskMemPWSTR, ExecuteScriptCompletedHandler,
+    PrintToPdfCompletedHandler,
     Microsoft::Web::WebView2::Win32::{
         COREWEBVIEW2_PRINT_ORIENTATION_LANDSCAPE, COREWEBVIEW2_PRINT_ORIENTATION_PORTRAIT,
         ICoreWebView2, ICoreWebView2_2, ICoreWebView2_7, ICoreWebView2Environment6,
@@ -18,6 +20,11 @@ use webview2_com::{
     },
 };
 use windows::core::Interface;
+
+#[derive(Deserialize)]
+struct DevToolsPrintToPdfResult {
+    data: String,
+}
 
 fn append_native_export_log(message: &str) {
     let timestamp = SystemTime::now()
@@ -163,6 +170,96 @@ fn page_dimensions_in_inches(page_size: &str, landscape: bool) -> (f64, f64) {
     }
 }
 
+fn decode_base64_value(value: &str) -> Result<Vec<u8>, String> {
+    let mut output = Vec::with_capacity(value.len() * 3 / 4);
+    let mut quartet = [0u8; 4];
+    let mut quartet_len = 0usize;
+    let mut saw_padding = false;
+
+    for byte in value.bytes().filter(|byte| !byte.is_ascii_whitespace()) {
+        let next = match byte {
+            b'A'..=b'Z' => byte - b'A',
+            b'a'..=b'z' => byte - b'a' + 26,
+            b'0'..=b'9' => byte - b'0' + 52,
+            b'+' => 62,
+            b'/' => 63,
+            b'=' => 64,
+            _ => return Err(format!("unexpected base64 character: {}", byte as char)),
+        };
+
+        if saw_padding && next != 64 {
+            return Err("unexpected data after base64 padding".into());
+        }
+
+        quartet[quartet_len] = next;
+        quartet_len += 1;
+
+        if quartet_len == 4 {
+            if quartet[0] == 64 || quartet[1] == 64 {
+                return Err("invalid base64 padding placement".into());
+            }
+
+            output.push((quartet[0] << 2) | (quartet[1] >> 4));
+
+            if quartet[2] == 64 {
+                if quartet[3] != 64 {
+                    return Err("invalid base64 padding placement".into());
+                }
+                saw_padding = true;
+            } else {
+                output.push((quartet[1] << 4) | (quartet[2] >> 2));
+                if quartet[3] == 64 {
+                    saw_padding = true;
+                } else {
+                    output.push((quartet[2] << 6) | quartet[3]);
+                }
+            }
+
+            quartet_len = 0;
+        }
+    }
+
+    if quartet_len != 0 {
+        return Err("invalid base64 length".into());
+    }
+
+    Ok(output)
+}
+
+fn call_devtools_protocol_method(
+    webview: &ICoreWebView2,
+    method_name: &str,
+    parameters: &str,
+) -> Result<String, String> {
+    let webview = webview.clone();
+    let method_name = method_name.to_string();
+    let parameters = parameters.to_string();
+    let (tx, rx) = mpsc::channel();
+
+    CallDevToolsProtocolMethodCompletedHandler::wait_for_async_operation(
+        Box::new(move |handler| unsafe {
+            let method_name = CoTaskMemPWSTR::from(method_name.as_str());
+            let parameters = CoTaskMemPWSTR::from(parameters.as_str());
+            webview
+                .CallDevToolsProtocolMethod(
+                    *method_name.as_ref().as_pcwstr(),
+                    *parameters.as_ref().as_pcwstr(),
+                    &handler,
+                )
+                .map_err(webview2_com::Error::WindowsError)
+        }),
+        Box::new(move |error_code, result| {
+            error_code?;
+            let _ = tx.send(result);
+            Ok(())
+        }),
+    )
+    .map_err(|error| format!("CallDevToolsProtocolMethod failed: {error}"))?;
+
+    rx.recv()
+        .map_err(|_| "receive CallDevToolsProtocolMethod result error".to_string())
+}
+
 fn create_print_settings(
     webview: &ICoreWebView2,
     options: &PdfExportOptions,
@@ -246,13 +343,13 @@ fn create_print_settings(
     Ok(settings)
 }
 
-fn print_to_pdf(
+fn print_to_pdf_with_webview_api(
     webview: &ICoreWebView2,
     output_path: &Path,
     options: &PdfExportOptions,
 ) -> Result<(), String> {
     append_native_export_log(&format!(
-        "print_to_pdf:start output={}",
+        "print_to_pdf_with_webview_api:start output={}",
         output_path.to_string_lossy()
     ));
     let output = output_path.to_string_lossy().to_string();
@@ -287,10 +384,82 @@ fn print_to_pdf(
         Err(_) => Err("receive PrintToPdf completion result error".into()),
     };
     append_native_export_log(match &result {
-        Ok(_) => "print_to_pdf:done",
-        Err(_) => "print_to_pdf:error",
+        Ok(_) => "print_to_pdf_with_webview_api:done",
+        Err(_) => "print_to_pdf_with_webview_api:error",
     });
     result
+}
+
+fn print_to_pdf_via_devtools(
+    webview: &ICoreWebView2,
+    output_path: &Path,
+    options: &PdfExportOptions,
+) -> Result<(), String> {
+    append_native_export_log(&format!(
+        "print_to_pdf_via_devtools:start output={} generate_outline={}",
+        output_path.to_string_lossy(),
+        options.generate_outline
+    ));
+
+    let (paper_width, paper_height) =
+        page_dimensions_in_inches(&options.page_size, options.landscape);
+    let parameters = serde_json::json!({
+        "landscape": options.landscape,
+        "displayHeaderFooter": false,
+        "printBackground": true,
+        "preferCSSPageSize": true,
+        "paperWidth": paper_width,
+        "paperHeight": paper_height,
+        "marginTop": mm_to_inches(options.margins.top),
+        "marginRight": mm_to_inches(options.margins.right),
+        "marginBottom": mm_to_inches(options.margins.bottom),
+        "marginLeft": mm_to_inches(options.margins.left),
+        "scale": options.scale.clamp(0.1, 2.0),
+        "generateTaggedPDF": true,
+        "generateDocumentOutline": options.generate_outline
+    });
+
+    let raw_response =
+        call_devtools_protocol_method(webview, "Page.printToPDF", &parameters.to_string())?;
+    let response: DevToolsPrintToPdfResult = serde_json::from_str(&raw_response)
+        .map_err(|error| format!("parse Page.printToPDF result error: {error}; raw={raw_response}"))?;
+    let pdf_bytes = decode_base64_value(response.data.trim())?;
+    if pdf_bytes.is_empty() {
+        return Err("Page.printToPDF returned an empty PDF".into());
+    }
+
+    fs::write(output_path, pdf_bytes)
+        .map_err(|error| format!("write Page.printToPDF output error: {error}"))?;
+    append_native_export_log("print_to_pdf_via_devtools:done");
+    Ok(())
+}
+
+fn print_to_pdf(
+    webview: &ICoreWebView2,
+    output_path: &Path,
+    options: &PdfExportOptions,
+) -> Result<(), String> {
+    if options
+        .native_header_footer
+        .as_ref()
+        .map(|value| value.enabled)
+        .unwrap_or(false)
+    {
+        append_native_export_log(
+            "print_to_pdf:native_header_footer_enabled_use_webview_api",
+        );
+        return print_to_pdf_with_webview_api(webview, output_path, options);
+    }
+
+    match print_to_pdf_via_devtools(webview, output_path, options) {
+        Ok(()) => Ok(()),
+        Err(error) => {
+            append_native_export_log(&format!(
+                "print_to_pdf:devtools_failed fallback=PrintToPdf error={error}"
+            ));
+            print_to_pdf_with_webview_api(webview, output_path, options)
+        }
+    }
 }
 
 fn build_export_window(
@@ -403,9 +572,10 @@ pub fn export_html_file_to_pdf(
     options: &PdfExportOptions,
 ) -> Result<NativePdfExportResult, NativePdfExportFailure> {
     append_native_export_log(&format!(
-        "export_html_file_to_pdf:start html={} output={} native_header_footer={}",
+        "export_html_file_to_pdf:start html={} output={} generate_outline={} native_header_footer={}",
         html_path.to_string_lossy(),
         output_path.to_string_lossy(),
+        options.generate_outline,
         options
             .native_header_footer
             .as_ref()

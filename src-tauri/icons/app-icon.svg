@@ -1,0 +1,16 @@
+<svg width="512" height="512" viewBox="0 0 512 512" fill="none" xmlns="http://www.w3.org/2000/svg">
+  <defs>
+    <linearGradient id="app-icon-bg" x1="84" y1="56" x2="428" y2="456" gradientUnits="userSpaceOnUse">
+      <stop stop-color="#6DD3FF" />
+      <stop offset="1" stop-color="#2563EB" />
+    </linearGradient>
+  </defs>
+  <rect x="40" y="40" width="432" height="432" rx="128" fill="url(#app-icon-bg)" />
+  <path
+    d="M184 368V144H276C334 144 374 180 374 238C374 300 334 336 276 336H184"
+    stroke="#F8FBFF"
+    stroke-width="56"
+    stroke-linecap="round"
+    stroke-linejoin="round"
+  />
+</svg>

@@ -14,10 +14,29 @@ type MarkdownPreviewProps = {
   onOpenPdfQuote: (path: string, page: number) => void;
 };
 
+type MarkdownNodePosition = {
+  position?: {
+    start?: { line?: number };
+    end?: { line?: number };
+  };
+};
+
 const EXTERNAL_PROTOCOL_RE = /^(https?:|mailto:|tel:|data:|blob:|asset:|tauri:)/i;
 const MARKDOWN_IMAGE_RE = /!\[[^\]]*]\(([^)\n]+)\)/g;
 const HTML_IMAGE_RE = /<img\s+[^>]*src=(["'])(.*?)\1/gi;
 const localImageDataUrlCache = new Map<string, Promise<string>>();
+
+const getMarkdownBlockSourceProps = (node: unknown) => {
+  const position = (node as MarkdownNodePosition | undefined)?.position;
+  const startLine = position?.start?.line;
+  const endLine = position?.end?.line;
+
+  return {
+    "data-md-block": "1",
+    ...(typeof startLine === "number" ? { "data-md-source-start": String(startLine) } : {}),
+    ...(typeof endLine === "number" ? { "data-md-source-end": String(endLine) } : {})
+  };
+};
 
 const blobToDataUrl = (blob: Blob) =>
   new Promise<string>((resolve, reject) => {
@@ -144,32 +163,32 @@ export function MarkdownPreview(props: MarkdownPreviewProps) {
 
   const components = useMemo<Components>(
     () => ({
-      p(paragraphProps) {
-        return <p data-md-block="1" {...paragraphProps} />;
+      p({ node, ...paragraphProps }) {
+        return <p {...getMarkdownBlockSourceProps(node)} {...paragraphProps} />;
       },
-      blockquote(blockquoteProps) {
-        return <blockquote data-md-block="1" {...blockquoteProps} />;
+      blockquote({ node, ...blockquoteProps }) {
+        return <blockquote {...getMarkdownBlockSourceProps(node)} {...blockquoteProps} />;
       },
-      h1(headingProps) {
-        return <h1 data-md-block="1" {...headingProps} />;
+      h1({ node, ...headingProps }) {
+        return <h1 {...getMarkdownBlockSourceProps(node)} {...headingProps} />;
       },
-      h2(headingProps) {
-        return <h2 data-md-block="1" {...headingProps} />;
+      h2({ node, ...headingProps }) {
+        return <h2 {...getMarkdownBlockSourceProps(node)} {...headingProps} />;
       },
-      h3(headingProps) {
-        return <h3 data-md-block="1" {...headingProps} />;
+      h3({ node, ...headingProps }) {
+        return <h3 {...getMarkdownBlockSourceProps(node)} {...headingProps} />;
       },
-      h4(headingProps) {
-        return <h4 data-md-block="1" {...headingProps} />;
+      h4({ node, ...headingProps }) {
+        return <h4 {...getMarkdownBlockSourceProps(node)} {...headingProps} />;
       },
-      h5(headingProps) {
-        return <h5 data-md-block="1" {...headingProps} />;
+      h5({ node, ...headingProps }) {
+        return <h5 {...getMarkdownBlockSourceProps(node)} {...headingProps} />;
       },
-      h6(headingProps) {
-        return <h6 data-md-block="1" {...headingProps} />;
+      h6({ node, ...headingProps }) {
+        return <h6 {...getMarkdownBlockSourceProps(node)} {...headingProps} />;
       },
-      table(tableProps) {
-        return <table data-md-block="1" {...tableProps} />;
+      table({ node, ...tableProps }) {
+        return <table {...getMarkdownBlockSourceProps(node)} {...tableProps} />;
       },
       a(linkProps) {
         const href = typeof linkProps.href === "string" ? linkProps.href.trim() : "";
@@ -205,7 +224,7 @@ export function MarkdownPreview(props: MarkdownPreviewProps) {
           </a>
         );
       },
-      code(codeProps) {
+      code({ node, ...codeProps }) {
         const className = codeProps.className ?? "";
         const codeText = String(codeProps.children ?? "");
         const blockLanguage = className.replace(/^language-/, "");
@@ -215,7 +234,7 @@ export function MarkdownPreview(props: MarkdownPreviewProps) {
           const parsed = parsePdfQuoteBlock(codeText);
           if (parsed) {
             return (
-              <blockquote className="pdf-quote-block" data-md-block="1">
+              <blockquote className="pdf-quote-block" {...getMarkdownBlockSourceProps(node)}>
                 <button type="button" className="pdf-quote-header" onClick={() => onOpenPdfQuote(parsed.meta.path, parsed.meta.page)}>
                   {parsed.meta.name} / page {parsed.meta.page}
                 </button>
@@ -230,7 +249,7 @@ export function MarkdownPreview(props: MarkdownPreviewProps) {
         }
 
         return (
-          <pre className="markdown-code-block" data-md-block="1">
+          <pre className="markdown-code-block" {...getMarkdownBlockSourceProps(node)}>
             <code className={className}>{codeProps.children}</code>
           </pre>
         );
@@ -246,8 +265,8 @@ export function MarkdownPreview(props: MarkdownPreviewProps) {
       ol(listProps) {
         return <ol className="list-decimal pl-6" {...listProps} />;
       },
-      li(listProps) {
-        return <li className="my-1" data-md-block="1" {...listProps} />;
+      li({ node, ...listProps }) {
+        return <li className="my-1" {...getMarkdownBlockSourceProps(node)} {...listProps} />;
       }
     }),
     [language, onOpenPdfQuote, pushToast, sourcePath]

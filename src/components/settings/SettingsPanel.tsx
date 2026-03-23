@@ -405,6 +405,15 @@ export function SettingsPanel({ showTrigger = true }: { showTrigger?: boolean })
                   <span className="mt-1 block text-xs leading-6 text-slate-600">{copy.pdfOrientationHint}</span>
                 </span>
               </label>
+              <label className="settings-soft-surface flex items-start gap-3 rounded-2xl border border-border px-4 py-3 text-sm">
+                <input className="mt-0.5" type="checkbox" checked={pdfExport.includeToc} onChange={(event) => updatePdfExport({ includeToc: event.target.checked })} />
+                <span>
+                  <span className="block font-semibold text-slate-900">{language === "en" ? "Generate PDF outline/bookmarks" : "生成 PDF 内置目录/书签"}</span>
+                  <span className="mt-1 block text-xs leading-6 text-slate-600">
+                    {language === "en" ? "Use Markdown headings to generate the PDF's built-in outline instead of inserting a contents page into the document body." : "根据 Markdown 标题生成 PDF 自带的目录/书签，不再在正文前插入单独的目录页。"}
+                  </span>
+                </span>
+              </label>
               <div>
                 <div className="mb-2 text-xs font-semibold text-slate-600">{copy.pdfMargins}</div>
                 <div className="grid gap-3 md:grid-cols-4">

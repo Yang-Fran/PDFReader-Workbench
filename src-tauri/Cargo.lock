@@ -2233,7 +2233,7 @@ dependencies = [
 
 [[package]]
 name = "pdfreader_workbench"
-version = "2.4.0"
+version = "2.4.1"
 dependencies = [
  "regex",
  "reqwest 0.12.28",

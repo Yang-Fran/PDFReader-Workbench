@@ -1,6 +1,6 @@
 import { open, save } from "@tauri-apps/plugin-dialog";
 import { useAppStore } from "../stores/appStore";
-import { ChatMessage, ProjectSnapshot, TranslationPageMetrics } from "../types";
+import { ChatMessage, PageScrollState, ProjectSnapshot, TranslationPageMetrics } from "../types";
 import { nativeFileService } from "./nativeFileService";
 import { buildPdfCacheFileName, getProjectCacheFilePath, PROJECT_STATE_CACHE_FILE, workspaceService } from "./workspaceService";
 
@@ -19,6 +19,8 @@ type ProjectStateCache = {
 
 type TranslationCacheState = Pick<ProjectSnapshot, "pageTextCache" | "pageTranslationCache" | "pageTranslationStatus"> & {
   pageMetrics?: Record<number, TranslationPageMetrics>;
+  pageCarryover?: Record<number, string>;
+  viewState?: PageScrollState;
 };
 
 const buildLegacyDialog = (messages: ChatMessage[]) => {
@@ -39,7 +41,7 @@ const buildSnapshot = (projectPath: string): ProjectSnapshot => {
   const translationDocuments = Object.values(state.translationDocuments).filter((document) => !!document.pdfPath);
 
   return {
-    version: 3,
+    version: 4,
     savedAt: new Date().toISOString(),
     pdfPath: state.pdfPath,
     pdfName: state.pdfName,
@@ -62,22 +64,23 @@ const buildSnapshot = (projectPath: string): ProjectSnapshot => {
           Object.keys(document.pageTextCache).length > 0 ||
           Object.keys(document.pageTranslationCache).length > 0 ||
           Object.keys(document.pageTranslationStatus).length > 0 ||
-          Object.keys(document.pageMetrics).length > 0
+          Object.keys(document.pageMetrics).length > 0 ||
+          Object.keys(document.pageCarryover).length > 0 ||
+          document.currentPage !== 1 ||
+          document.viewState.page !== 1 ||
+          document.viewState.progress !== 0
       )
       .map((document) => buildPdfCacheFileName(document.pdfPath, document.pdfName)),
     llmCacheIndex: state.dialogs.some((dialog) => dialog.messages.length > 0) || !!state.lastAIReply ? [PROJECT_STATE_CACHE_FILE, ...state.dialogs.filter((dialog) => dialog.messages.length > 0).map((dialog) => `dialog-${dialog.id}.json`)] : [],
     projectStateCache: state.dialogs.some((dialog) => dialog.messages.length > 0) || !!state.lastAIReply ? PROJECT_STATE_CACHE_FILE : undefined,
-    settings: {
-      baseUrl: state.settings.baseUrl,
-      model: state.settings.model
-    }
+    notesViewState: state.notesViewState
   };
 };
 
 const validateSnapshot = (value: unknown): value is ProjectSnapshot | LegacySnapshot => {
   if (!value || typeof value !== "object") return false;
   const snapshot = value as { version?: number; pdfPath?: unknown };
-  return (snapshot.version === 1 || snapshot.version === 2 || snapshot.version === 3) && typeof snapshot.pdfPath === "string";
+  return (snapshot.version === 1 || snapshot.version === 2 || snapshot.version === 3 || snapshot.version === 4) && typeof snapshot.pdfPath === "string";
 };
 
 const normalizeSnapshot = (value: ProjectSnapshot | LegacySnapshot): ProjectSnapshot => {
@@ -109,7 +112,9 @@ const readTranslationCacheState = async (projectPath: string, snapshot: ProjectS
         pageTextCache: parsed.pageTextCache ?? {},
         pageTranslationCache: parsed.pageTranslationCache ?? {},
         pageTranslationStatus: parsed.pageTranslationStatus ?? {},
-        pageMetrics: parsed.pageMetrics ?? {}
+        pageMetrics: parsed.pageMetrics ?? {},
+        pageCarryover: parsed.pageCarryover ?? {},
+        viewState: parsed.viewState ?? { page: parsed.currentPage ?? 1, progress: 0 }
       };
     } catch {
       continue;
@@ -161,6 +166,7 @@ export const projectService = {
   },
 
   async saveWorkspaceArtifacts(explicitProjectPath?: string) {
+    window.dispatchEvent(new CustomEvent("app:collect-project-state"));
     const state = useAppStore.getState();
     const targetProjectPath = explicitProjectPath || state.projectPath;
     if (!targetProjectPath) return false;

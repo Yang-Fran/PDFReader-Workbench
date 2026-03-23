@@ -570,6 +570,25 @@ const stripInlineMarkdown = (value: string) =>
     .replace(/\s+/g, " ")
     .trim();
 
+const buildExportTocMarkup = (_headings: Array<{ id: string; level: number; text: string }>, _language: "zh" | "en") => {
+  const headings = _headings;
+  const language = _language;
+  if (headings.length < 2) return "";
+
+  const title = language === "en" ? "Contents" : "目录";
+  const items = headings
+    .map(
+      (heading) =>
+        `<li class="notes-export-toc__item notes-export-toc__item--level-${Math.min(heading.level, 6)}"><a href="#${escapeHtml(heading.id)}">${escapeHtml(heading.text)}</a></li>`
+    )
+    .join("");
+
+  return `<nav class="notes-export-toc" aria-label="${escapeHtml(title)}">
+    <div class="notes-export-toc__title">${escapeHtml(title)}</div>
+    <ol class="notes-export-toc__list">${items}</ol>
+  </nav>`;
+};
+
 const resolveExportTitle = (
   markdown: string,
   language: "zh" | "en",
@@ -716,6 +735,39 @@ ${marginBoxStyles}
       widows: 2;
       orphans: 2;
     }
+    .notes-export-toc {
+      margin: 0 0 1.4rem;
+      border: 1px solid #d9dde5;
+      border-radius: 16px;
+      background: #f8fafc;
+      padding: 1rem 1.1rem;
+      break-inside: avoid;
+      page-break-inside: avoid;
+    }
+    .notes-export-toc__title {
+      margin-bottom: 0.75rem;
+      font-size: 1.05rem;
+      font-weight: 700;
+      letter-spacing: 0.02em;
+    }
+    .notes-export-toc__list {
+      margin: 0;
+      padding: 0;
+      list-style: none;
+    }
+    .notes-export-toc__item {
+      margin: 0.28rem 0;
+      line-height: 1.55;
+    }
+    .notes-export-toc__item a {
+      color: inherit;
+      text-decoration: none;
+    }
+    .notes-export-toc__item--level-2 { margin-left: 1rem; }
+    .notes-export-toc__item--level-3 { margin-left: 2rem; }
+    .notes-export-toc__item--level-4 { margin-left: 3rem; }
+    .notes-export-toc__item--level-5 { margin-left: 4rem; }
+    .notes-export-toc__item--level-6 { margin-left: 5rem; }
     .notes-export-document > :first-child { margin-top: 0; }
     .notes-export-document > :last-child { margin-bottom: 0; }
     .notes-export-document pre,
@@ -1087,6 +1139,7 @@ export const buildPdfPrintOptions = (
     pageSize: settings.pageSize,
     landscape: settings.landscape,
     scale: settings.scale,
+    generateOutline: settings.includeToc,
     margins: settings.margins
   };
 };

@@ -91,6 +91,7 @@ export interface PdfExportSettings {
   pageSize: "A4" | "Letter";
   landscape: boolean;
   scale: number;
+  includeToc: boolean;
   sourcePath: string;
   margins: PdfExportMargins;
   header: PdfExportHeaderFooter;
@@ -110,6 +111,8 @@ export interface AppSettings {
   hideCommandMessages: boolean;
   enableAgentStreaming: boolean;
   enableTranslationStreaming: boolean;
+  translationHighlightKeyPoints: boolean;
+  translationCarryover: boolean;
   chatSystemPrompt: string;
   translationPrompt: string;
   glossary: string;
@@ -136,6 +139,7 @@ export interface PdfViewState {
   textLayerVisible: boolean;
   pdfLayerVisible: boolean;
   scrollLinked: boolean;
+  scrollPosition?: PageScrollState;
 }
 
 export interface TranslationPageMetrics {
@@ -143,6 +147,17 @@ export interface TranslationPageMetrics {
   pdfHeight: number;
   translationCardHeight: number;
   translationContentHeight: number;
+}
+
+export interface PageScrollState {
+  page: number;
+  progress: number;
+}
+
+export interface NotesViewState {
+  editorScrollTop: number;
+  previewScrollTop: number;
+  selectionAnchor: number;
 }
 
 export interface TranslationDocumentCache {
@@ -153,10 +168,12 @@ export interface TranslationDocumentCache {
   pageTranslationCache: Record<number, string>;
   pageTranslationStatus: Record<number, TranslationStatus>;
   pageMetrics: Record<number, TranslationPageMetrics>;
+  pageCarryover: Record<number, string>;
+  viewState: PageScrollState;
 }
 
 export interface ProjectSnapshot {
-  version: 2 | 3;
+  version: 2 | 3 | 4;
   savedAt: string;
   pdfPath: string;
   pdfName: string;
@@ -177,5 +194,6 @@ export interface ProjectSnapshot {
   translationCacheIndex: string[];
   llmCacheIndex: string[];
   projectStateCache?: string;
-  settings: Pick<AppSettings, "baseUrl" | "model">;
+  notesViewState?: NotesViewState;
+  settings?: Pick<AppSettings, "baseUrl" | "model">;
 }

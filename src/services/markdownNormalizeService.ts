@@ -178,6 +178,118 @@ export const normalizeAlignmentBlocks = (markdown: string) => {
   return lines.join("\n");
 };
 
+const INLINE_CODE_RE = /(`+[^`]*`+)/g;
+
+const isEscapedMarker = (value: string, index: number) => {
+  let backslashCount = 0;
+  let cursor = index;
+
+  while (cursor > 0 && value.charCodeAt(cursor - 1) === 0x5c) {
+    backslashCount += 1;
+    cursor -= 1;
+  }
+
+  return backslashCount % 2 === 1;
+};
+
+const findNextStrongMarker = (value: string, start: number) => {
+  let cursor = start;
+
+  while (cursor < value.length - 1) {
+    const marker = value.slice(cursor, cursor + 2);
+    if ((marker === "**" || marker === "__") && !isEscapedMarker(value, cursor)) {
+      return { index: cursor, marker };
+    }
+    cursor += 1;
+  }
+
+  return null;
+};
+
+const findStrongMarkerClose = (value: string, marker: string, start: number) => {
+  let cursor = start;
+
+  while (cursor < value.length - 1) {
+    const found = value.indexOf(marker, cursor);
+    if (found < 0) return -1;
+    if (!isEscapedMarker(value, found)) return found;
+    cursor = found + marker.length;
+  }
+
+  return -1;
+};
+
+const normalizeLooseStrongInSegment = (segment: string) => {
+  let output = "";
+  let cursor = 0;
+
+  while (cursor < segment.length) {
+    const nextMarker = findNextStrongMarker(segment, cursor);
+    if (!nextMarker) {
+      output += segment.slice(cursor);
+      break;
+    }
+
+    output += segment.slice(cursor, nextMarker.index);
+    const closeIndex = findStrongMarkerClose(segment, nextMarker.marker, nextMarker.index + nextMarker.marker.length);
+    if (closeIndex < 0) {
+      output += nextMarker.marker;
+      cursor = nextMarker.index + nextMarker.marker.length;
+      continue;
+    }
+
+    const inner = segment.slice(nextMarker.index + nextMarker.marker.length, closeIndex);
+    const trimmed = inner.trim();
+
+    if (trimmed && trimmed !== inner) {
+      output += `${nextMarker.marker}${trimmed}${nextMarker.marker}`;
+      cursor = closeIndex + nextMarker.marker.length;
+      continue;
+    }
+
+    output += nextMarker.marker;
+    cursor = nextMarker.index + nextMarker.marker.length;
+  }
+
+  return output;
+};
+
+export const normalizeLooseStrongSyntax = (markdown: string) => {
+  const lines = markdown.replace(/\r\n/g, "\n").split("\n");
+  const output: string[] = [];
+  let fenceMarker: string | null = null;
+
+  for (const line of lines) {
+    const trimmedStart = line.trimStart();
+    const fenceMatch = trimmedStart.match(/^(```+|~~~+)/);
+
+    if (fenceMatch) {
+      const marker = fenceMatch[1];
+      if (!fenceMarker) {
+        fenceMarker = marker;
+      } else if (trimmedStart.startsWith(fenceMarker)) {
+        fenceMarker = null;
+      }
+      output.push(line);
+      continue;
+    }
+
+    if (fenceMarker) {
+      output.push(line);
+      continue;
+    }
+
+    output.push(
+      line
+        .split(INLINE_CODE_RE)
+        .map((segment, index) => (index % 2 === 1 ? segment : normalizeLooseStrongInSegment(segment)))
+        .join("")
+    );
+  }
+
+  return output.join("\n");
+};
+
 export const normalizeCustomInlineTags = (markdown: string) =>
   markdown
     .replace(/<\s*bold\s*>/gi, "<strong>")
@@ -229,7 +341,7 @@ const collectMarkdownResources = (markdown: string, sourcePath: string) => {
 
 export const normalizeMarkdownDocument = (markdown: string, options: { sourcePath: string }): NormalizedMarkdownDocument => {
   const normalizedMarkdown = normalizeCustomInlineTags(
-    normalizeAlignmentBlocks(normalizeLocalAssetDestinations(markdown).replace(/\r\n/g, "\n"))
+    normalizeAlignmentBlocks(normalizeLooseStrongSyntax(normalizeLocalAssetDestinations(markdown).replace(/\r\n/g, "\n")))
   );
   return {
     markdown: normalizedMarkdown,
